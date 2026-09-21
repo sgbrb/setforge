@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Space_Grotesk, Space_Mono } from 'next/font/google'
+import { Providers } from './providers'
 import './globals.css'
 
 const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-sans' })
@@ -13,7 +14,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR" className={`${spaceGrotesk.variable} ${spaceMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   )
 }

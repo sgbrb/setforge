@@ -6,18 +6,35 @@ interface Props {
   onAddTrack: (track: Track) => void
 }
 
+// Fontes ativas no SetForge.
+// - YouTube: única fonte funcional no momento (API key configurada).
+// - Spotify: pendente (requer conta Premium para criar app no Developer Dashboard).
+// - Beatport: pendente (Ator da Apify bloqueado pelo Cloudflare do Beatport).
+// - SoundCloud: descartado (API exige Artist Pro e proíbe "DJ apps" nos Termos).
+const AVAILABLE_SOURCES = ['youtube'] as const
+type SourceKey = typeof AVAILABLE_SOURCES[number]
+
 export default function TrackSearch({ onAddTrack }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Track[]>([])
   const [loading, setLoading] = useState(false)
-  const [sources, setSources] = useState({ spotify: true, soundcloud: false, youtube: false })
+  const [sources, setSources] = useState<Record<SourceKey, boolean>>({
+    youtube: true,
+  })
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
 
   const search = useCallback(async (q: string) => {
     if (q.trim().length < 2) { setResults([]); return }
+
+    const activeSources = (Object.entries(sources) as [SourceKey, boolean][])
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+      .join(',')
+
+    if (!activeSources) { setResults([]); return }
+
     setLoading(true)
     try {
-      const activeSources = Object.entries(sources).filter(([, v]) => v).map(([k]) => k).join(',')
       const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&sources=${activeSources}`)
       const data = await res.json()
       setResults(data.tracks ?? [])
@@ -36,8 +53,9 @@ export default function TrackSearch({ onAddTrack }: Props) {
 
   const sourceColor = (src?: string) => {
     if (src === 'spotify') return '#1DB954'
-    if (src === 'soundcloud') return '#FF5500'
     if (src === 'youtube') return '#FF0000'
+    if (src === 'beatport') return '#00FF7F'
+    if (src === 'soundcloud') return '#FF5500'
     return 'var(--muted)'
   }
 
@@ -45,7 +63,7 @@ export default function TrackSearch({ onAddTrack }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Source toggles */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        {(['spotify', 'soundcloud', 'youtube'] as const).map(src => (
+        {AVAILABLE_SOURCES.map(src => (
           <button
             key={src}
             onClick={() => setSources(s => ({ ...s, [src]: !s[src] }))}
@@ -147,7 +165,7 @@ export default function TrackSearch({ onAddTrack }: Props) {
 
       {query.length >= 2 && !loading && results.length === 0 && (
         <p style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', padding: '12px 0' }}>
-          Nenhuma faixa encontrada. Tente outros termos ou ative mais fontes.
+          Nenhuma faixa encontrada. Tente outros termos.
         </p>
       )}
     </div>

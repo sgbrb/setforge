@@ -1,30 +1,35 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSession } from 'next-auth/react'
+import TrackUpload from '@/components/TrackUpload'
 import { Track, SetConfig, GeneratedSetlist } from '@/lib/types'
-import TrackSearch from '@/components/TrackSearch'
 import SetlistView from '@/components/SetlistView'
-
-const SAMPLE_TRACKS: Track[] = [
-  { id: '1', title: 'Ultra Soul', artist: 'Vintage Culture', bpm: 124, key: 'Dm', energy: 8, source: 'manual' },
-  { id: '2', title: 'Losing It', artist: 'FISHER', bpm: 128, key: 'Bm', energy: 9, source: 'manual' },
-  { id: '3', title: 'See the Sun', artist: 'Shouse', bpm: 120, key: 'C', energy: 8, source: 'manual' },
-  { id: '4', title: 'Love Tonight', artist: 'Shouse', bpm: 118, key: 'Am', energy: 7, source: 'manual' },
-  { id: '5', title: 'Cola', artist: 'CamelPhat', bpm: 124, key: 'Gm', energy: 7, source: 'manual' },
-  { id: '6', title: 'Kernkraft 400', artist: 'Zombie Nation', bpm: 130, key: 'Fm', energy: 10, source: 'manual' },
-]
+import { findCompatibleTracks } from '@/lib/harmonic-utils'
+import { AudioAnalysis } from '@/lib/mix-timeline'
 
 export default function Home() {
+  const { status } = useSession()
+
   const [tracks, setTracks] = useState<Track[]>([])
   const [config, setConfig] = useState<SetConfig>({
-    eventType: 'balada eletrônica',
+    eventType: 'Balada eletrônica',
     duration: '2 horas',
-    targetBpm: '120-130 BPM',
-    energyCurve: 'crescente (começa suave, vai subindo)',
+    energyCurve: 'aquecer (começa suave, vai subindo)',
     audience: '',
   })
   const [setlist, setSetlist] = useState<GeneratedSetlist | null>(null)
   const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<'search' | 'manual'>('search')
+
+  // Análise estrutural por trackId + duração
+  const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
+  const [durations, setDurations] = useState<Record<string, number>>({})
+
+  // 🔒 Se não estiver logado, redireciona
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      window.location.href = '/login'
+    }
+  }, [status])
 
   const addTrack = (track: Track) => {
     setTracks(prev => prev.find(t => t.id === track.id) ? prev : [...prev, track])
@@ -32,25 +37,72 @@ export default function Home() {
 
   const removeTrack = (id: string) => setTracks(prev => prev.filter(t => t.id !== id))
 
-  const loadSamples = () => setTracks(SAMPLE_TRACKS)
+  // Recebe a análise estrutural do TrackUpload
+  const handleAddAnalysis = (
+    trackId: string,
+    analysis: AudioAnalysis,
+    durationSec: number
+  ) => {
+    setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
+    setDurations(prev => ({ ...prev, [trackId]: durationSec }))
+  }
 
   const generate = async () => {
     if (tracks.length < 3) return
     setLoading(true)
     setSetlist(null)
     try {
+      const anchor = tracks[0]
+      const compatible = findCompatibleTracks(anchor, tracks, 60)
+      const tracksForAI = compatible.length > 0
+        ? [anchor, ...compatible.slice(0, 20).map(c => c.track)]
+        : tracks
+
       const res = await fetch('/api/generate-setlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks, config }),
+        body: JSON.stringify({ tracks: tracksForAI, config }),
       })
+
+      if (res.status === 401) {
+        alert('Você precisa fazer login para gerar um set list.')
+        window.location.href = '/login'
+        return
+      }
+
       const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || 'Erro ao gerar set list')
+        return
+      }
       setSetlist(data)
-    } catch {
-      alert('Erro ao gerar set list. Tente novamente.')
+    } catch (error) {
+      console.error('Erro completo:', error)
+      const msg = error instanceof Error ? error.message : 'Erro desconhecido'
+      alert(`Erro ao gerar set list: ${msg}`)
     } finally {
       setLoading(false)
     }
+  }
+
+  if (status === 'loading') {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        background: 'var(--bg)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <p style={{
+          color: 'var(--muted)',
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: 13,
+        }}>
+          ⟳ verificando sessão...
+        </p>
+      </div>
+    )
   }
 
   return (
@@ -62,78 +114,147 @@ export default function Home() {
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>SetForge</h1>
           <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>gerador de set list com IA</p>
         </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {status === 'authenticated' ? (
+            <>
+              <span style={{
+                fontSize: 12,
+                color: 'var(--muted)',
+                fontFamily: 'var(--font-mono, monospace)',
+              }}>
+                ● logado
+              </span>
+              <button
+                onClick={async () => {
+                  const { signOut } = await import('next-auth/react')
+                  await signOut({ callbackUrl: '/' })
+                }}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  color: 'var(--muted)',
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  cursor: 'pointer',
+                }}
+              >
+                sair
+              </button>
+            </>
+          ) : (
+            <a
+              href="/login"
+              style={{
+                background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+                border: 'none',
+                borderRadius: 8,
+                color: '#fff',
+                padding: '8px 18px',
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+                textDecoration: 'none',
+              }}
+            >
+              entrar
+            </a>
+          )}
+        </div>
       </header>
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 20px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
         {/* Config */}
         <Panel title="configuração do set">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Field label="tipo de evento">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* Onde vai tocar */}
+            <Field label="🎧 Onde você vai tocar?">
               <select value={config.eventType} onChange={e => setConfig(c => ({ ...c, eventType: e.target.value }))}>
                 {['Balada eletrônica','Festa aberta / open bar','Casamento','Corporativo','Festival','Bar / Lounge'].map(v => <option key={v}>{v}</option>)}
               </select>
             </Field>
-            <Field label="duração">
+
+            {/* Quanto tempo */}
+            <Field label="⏱ Quanto tempo de set?">
               <select value={config.duration} onChange={e => setConfig(c => ({ ...c, duration: e.target.value }))}>
                 {['1 hora','2 horas','3 horas','4 horas','5+ horas'].map(v => <option key={v}>{v}</option>)}
               </select>
             </Field>
-            <Field label="BPM alvo">
-              <select value={config.targetBpm} onChange={e => setConfig(c => ({ ...c, targetBpm: e.target.value }))}>
-                {['80-100 BPM','100-120 BPM','120-130 BPM','130-145 BPM','145-175 BPM'].map(v => <option key={v}>{v}</option>)}
-              </select>
+
+            {/* Como a pista deve reagir */}
+            <Field label="⚡ Como a pista deve reagir?">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[
+                  { value: 'aquecer (começa suave, vai subindo)', label: 'Aquecer devagar e explodir no final' },
+                  { value: 'constante alta energia', label: 'Manter energia alta o tempo todo' },
+                  { value: 'pico no meio (sobe, pico, desce)', label: 'Pico no meio e descer no final' },
+                  { value: 'montanha russa (variada)', label: 'Altos e baixos (montanha-russa)' },
+                ].map(opt => (
+                  <label
+                    key={opt.value}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '10px 14px',
+                      background: config.energyCurve === opt.value ? 'rgba(124, 92, 252, 0.1)' : 'var(--surface2)',
+                      border: `1px solid ${config.energyCurve === opt.value ? 'var(--accent)' : 'var(--border)'}`,
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="energyCurve"
+                      checked={config.energyCurve === opt.value}
+                      onChange={() => setConfig(c => ({ ...c, energyCurve: opt.value }))}
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
             </Field>
-            <Field label="curva de energia">
-              <select value={config.energyCurve} onChange={e => setConfig(c => ({ ...c, energyCurve: e.target.value }))}>
-                {['crescente (começa suave, vai subindo)','pico no meio (sobe, pico, desce)','constante alta energia','montanha russa (variada)'].map(v => <option key={v}>{v}</option>)}
-              </select>
-            </Field>
-            <Field label="público / contexto" full>
-              <input type="text" value={config.audience} onChange={e => setConfig(c => ({ ...c, audience: e.target.value }))} placeholder="ex: público jovem 20-30 anos, fãs de house music..." />
+
+            {/* Quem vai estar na pista */}
+            <Field label="👥 Quem vai estar na pista? (opcional)">
+              <input
+                type="text"
+                value={config.audience}
+                onChange={e => setConfig(c => ({ ...c, audience: e.target.value }))}
+                placeholder="ex: público jovem 20-30 anos, fãs de house music..."
+              />
             </Field>
           </div>
         </Panel>
 
         {/* Library */}
         <Panel title="biblioteca de músicas" badge={`${tracks.length} faixa${tracks.length !== 1 ? 's' : ''}`}>
-          {/* Tabs */}
-          <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-            {(['search','manual'] as const).map(tab => (
-              <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, padding: '8px 12px', borderRadius: 8, border: activeTab === tab ? '1px solid var(--border)' : 'none', background: activeTab === tab ? 'var(--surface)' : 'transparent', color: activeTab === tab ? 'var(--text)' : 'var(--muted)', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer' }}>
-                {tab === 'search' ? '🔍 Buscar (Spotify · SoundCloud · YouTube)' : '✏️ Adicionar manual'}
-              </button>
-            ))}
-          </div>
+          <TrackUpload
+            onAddTrack={addTrack}
+            onAddAnalysis={handleAddAnalysis}
+            libraryTracks={tracks}
+          />
 
-          {activeTab === 'search' && <TrackSearch onAddTrack={addTrack} />}
-
-          {activeTab === 'manual' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 8, padding: '0 0 8px' }}>
-                {['título — artista','BPM','tom','energia'].map(h => <span key={h} style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', padding: '0 12px' }}>{h}</span>)}
-              </div>
-              {tracks.map(t => (
-                <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
-                  <input defaultValue={t.title} onChange={e => setTracks(prev => prev.map(x => x.id === t.id ? { ...x, title: e.target.value } : x))} />
-                  <input type="number" defaultValue={t.bpm} onChange={e => setTracks(prev => prev.map(x => x.id === t.id ? { ...x, bpm: Number(e.target.value) } : x))} />
-                  <input defaultValue={t.key} onChange={e => setTracks(prev => prev.map(x => x.id === t.id ? { ...x, key: e.target.value } : x))} />
-                  <input type="number" defaultValue={t.energy} min={1} max={10} onChange={e => setTracks(prev => prev.map(x => x.id === t.id ? { ...x, energy: Number(e.target.value) } : x))} />
-                  <button onClick={() => removeTrack(t.id)} style={{ width: 32, height: 32, border: '1px solid var(--border)', borderRadius: 8, background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16 }}>×</button>
-                </div>
-              ))}
-              <button onClick={() => addTrack({ id: Date.now().toString(), title: '', artist: '', bpm: 128, key: 'Am', energy: 7, source: 'manual' })} style={{ border: '1px dashed var(--accent)', borderRadius: 10, background: 'none', color: 'var(--accent)', padding: '9px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, marginTop: 4 }}>
-                + adicionar faixa
+          {tracks.length > 0 && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setTracks([])}
+                style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
+              >
+                limpar biblioteca
               </button>
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-            <button onClick={loadSamples} style={btnStyle('secondary')}>carregar exemplos</button>
-            {tracks.length > 0 && <button onClick={() => setTracks([])} style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}>limpar biblioteca</button>}
-          </div>
-
-          {/* Tracks list (visible in both tabs) */}
+          {/* Tracks list */}
           {tracks.length > 0 && (
             <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
               <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>faixas na biblioteca</p>
@@ -142,7 +263,15 @@ export default function Home() {
                   <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
                     {t.artworkUrl && <img src={t.artworkUrl} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover' }} />}
                     <div style={{ flex: 1, fontSize: 13 }}><strong>{t.title}</strong> {t.artist && `— ${t.artist}`}</div>
-                    <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>{t.bpm > 0 ? `${t.bpm} BPM` : ''} {t.key}</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
+                      {t.bpm > 0 ? `${t.bpm} BPM` : ''}
+                      {t.key && t.key !== 'desconhecido' ? ` · ${t.key}` : ''}
+                    </span>
+                    {analyses[t.id] && (
+                      <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--font-mono, monospace)' }}>
+                        ✓ estrutura
+                      </span>
+                    )}
                     <button onClick={() => removeTrack(t.id)} style={{ border: 'none', background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
@@ -152,9 +281,9 @@ export default function Home() {
 
           <div style={{ marginTop: 20 }}>
             <button onClick={generate} disabled={tracks.length < 3 || loading} style={{ ...btnStyle('primary'), width: '100%', justifyContent: 'center', opacity: tracks.length < 3 ? 0.5 : 1, cursor: tracks.length < 3 ? 'not-allowed' : 'pointer' }}>
-              {loading ? '⟳ gerando...' : '✦ gerar set list com IA'}
+              {loading ? '⟳ montando...' : '✦ montar setlist'}
             </button>
-            {tracks.length < 3 && <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>adicione pelo menos 3 faixas para gerar</p>}
+            {tracks.length < 3 && <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>adicione pelo menos 3 faixas para montar</p>}
           </div>
         </Panel>
 
@@ -164,11 +293,18 @@ export default function Home() {
             {loading && (
               <div style={{ textAlign: 'center', padding: 48 }}>
                 <div style={{ width: 40, height: 40, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
-                <p style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--muted)' }}>analisando BPM e harmonia...</p>
+                <p style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--muted)' }}>analisando harmonia e estrutura...</p>
                 <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
               </div>
             )}
-            {setlist && <SetlistView setlist={setlist} onRegenerate={generate} />}
+            {setlist && (
+              <SetlistView
+                setlist={setlist}
+                onRegenerate={generate}
+                analyses={analyses}
+                durations={durations}
+              />
+            )}
           </Panel>
         )}
       </div>

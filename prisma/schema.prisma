@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+model User {
+  id        String    @id @default(cuid())
+  name      String?
+  email     String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  setlists  Setlist[]
+}
+
+model Setlist {
+  id            String         @id @default(cuid())
+  name          String
+  eventType     String
+  duration      String
+  energyCurve   String
+  audience      String?
+  analysis      String?
+  djTip         String?
+  peakMoment    String?
+  totalDuration String?
+  tracks        SetlistTrack[]
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model SetlistTrack {
+  id             String  @id @default(cuid())
+  position       Int
+  title          String
+  artist         String
+  bpm            Int
+  key            String?
+  energy         Int
+  transitionNote String?
+  setlistId      String
+  setlist        Setlist @relation(fields: [setlistId], references: [id], onDelete: Cascade)
+}

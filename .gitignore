@@ -26,3 +26,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# audio (arquivos locais de teste)
+*.mp3
+*.wav
+*.ogg
+*.flac
