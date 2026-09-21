@@ -40,3 +40,6 @@ __pycache__/
 *.wav
 *.ogg
 *.flac
+
+# debug
+teste_torchcodec.py

@@ -8,42 +8,19 @@ import os
 import time
 import uuid
 import traceback
-import shutil
 
-# ⚠️ FFmpeg: tenta várias fontes, em ordem de prioridade
-# 1. Variável de ambiente FFMPEG_BIN
-# 2. ffmpeg.exe achado no PATH do sistema
-# 3. Caminho hardcoded da máquina original (fallback)
+# 🔑 CRÍTICO: define o PATH pro FFmpeg *shared* ANTES de importar torchcodec.
+# O torchcodec precisa das DLLs (avcodec-XX.dll, etc.) — o ffmpeg.exe "essentials"
+# NÃO tem essas DLLs. Por isso precisamos do build "shared".
+FFMPEG_SHARED_BIN = r"C:\Users\BGS13627\Desktop\EngComp\dlsss\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
 
-def _find_ffmpeg_bin():
-    # 1. Env var
-    env_path = os.environ.get("FFMPEG_BIN")
-    if env_path and os.path.isdir(env_path):
-        return env_path, "env var FFMPEG_BIN"
-
-    # 2. PATH do sistema
-    ffmpeg_exe = shutil.which("ffmpeg")
-    if ffmpeg_exe:
-        return os.path.dirname(ffmpeg_exe), "PATH do sistema"
-
-    # 3. Fallback hardcoded (máquina original)
-    fallback = r"C:\Users\BGS13627\Desktop\EngComp\dlsss\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
-    if os.path.isdir(fallback):
-        return fallback, "caminho hardcoded (máquina original)"
-
-    return None, "não encontrado"
-
-FFMPEG_BIN, FFMPEG_SOURCE = _find_ffmpeg_bin()
-
-if FFMPEG_BIN:
-    os.add_dll_directory(FFMPEG_BIN)
-    print(f"[startup] FFmpeg encontrado em: {FFMPEG_BIN} ({FFMPEG_SOURCE})")
+if os.path.isdir(FFMPEG_SHARED_BIN):
+    os.environ["PATH"] = FFMPEG_SHARED_BIN + os.pathsep + os.environ.get("PATH", "")
+    print(f"[startup] PATH atualizado com: {FFMPEG_SHARED_BIN}")
 else:
-    print("[AVISO] FFmpeg NÃO encontrado. Análise pode falhar.")
-    print("[AVISO] Configure a variável de ambiente FFMPEG_BIN ou instale o FFmpeg no PATH.")
+    print(f"[AVISO] FFmpeg shared não encontrado em: {FFMPEG_SHARED_BIN}")
+    print("[AVISO] O torchcodec pode falhar ao decodificar MP3.")
 
-
-# 📦 Armazenamento em memória dos jobs
 JOBS: Dict[str, dict] = {}
 
 
@@ -51,6 +28,11 @@ JOBS: Dict[str, dict] = {}
 async def lifespan(app: FastAPI):
     print("[startup] Warmup: importando allin1_infer.analyze...")
     try:
+        from torchcodec._core import ops
+        from torchcodec.decoders import AudioDecoder  # noqa: F401
+        print(f"[startup] torchcodec OK — FFmpeg major: {ops.ffmpeg_major_version}")
+        print(f"[startup] FFmpeg path: {ops.ffmpeg_path}")
+
         from allin1_infer import analyze  # noqa: F401
         print("[startup] OK. Servidor pronto.")
     except Exception as e:
@@ -75,7 +57,6 @@ async def health():
 
 
 def _run_analysis(job_id: str, tmp_path: str, original_name: str):
-    """Roda em background. Atualiza JOBS[job_id] quando termina."""
     try:
         print(f"[job {job_id}] Iniciando análise de {original_name}...")
         JOBS[job_id]["status"] = "processing"
@@ -118,10 +99,6 @@ async def analyze_audio(
     background: BackgroundTasks,
     file: UploadFile = File(...),
 ):
-    """
-    Recebe o arquivo, cria um job e retorna IMEDIATAMENTE com o job_id.
-    O processamento acontece em background. O cliente consulta /analyze-status/{job_id}.
-    """
     suffix = os.path.splitext(file.filename or ".mp3")[1] or ".mp3"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
@@ -139,7 +116,6 @@ async def analyze_audio(
     }
 
     print(f"[analyze] Job {job_id} criado para {file.filename} ({JOBS[job_id]['size_mb']} MB)")
-
     background.add_task(_run_analysis, job_id, tmp_path, file.filename or "unknown.mp3")
 
     return {"job_id": job_id, "status": "queued"}
@@ -147,11 +123,9 @@ async def analyze_audio(
 
 @app.get("/analyze-status/{job_id}")
 async def analyze_status(job_id: str):
-    """Consulta o status de um job. O frontend faz polling nesse endpoint."""
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job não encontrado")
-
     return {
         "job_id": job_id,
         "status": job["status"],
