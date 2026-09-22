@@ -54,3 +54,7 @@ __pycache__/
 teste_*.py
 teste_*.txt
 pacotes.txt
+
+# scripts de teste/debug
+teste_*.py
+teste_*.txt

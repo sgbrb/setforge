@@ -5,6 +5,7 @@ import { GeneratedSetlist } from '@/lib/types'
 import {
   MixTimeline,
   AudioAnalysis,
+  AudioSegment,
   formatSeconds,
   calculateMixTimeline,
 } from '@/lib/mix-timeline'
@@ -28,30 +29,14 @@ export default function SetlistView({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Cabeçalho com análise geral */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <div style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: 'var(--green)',
-            boxShadow: '0 0 8px var(--green)',
-          }} />
-          <p style={{
-            fontSize: 11,
-            color: 'var(--muted)',
-            fontFamily: 'var(--font-mono, monospace)',
-            textTransform: 'uppercase',
-            letterSpacing: 1,
-          }}>
-            análise do set
-          </p>
-        </div>
-        <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
-          {setlist.analysis}
-        </p>
-      </div>
+      {/* 🔝 ALERTA DE COMPATIBILIDADE (no topo) */}
+      {analyses && durations && (
+        <CompatibilityAlert
+          setlist={setlist}
+          analyses={analyses}
+          durations={durations}
+        />
+      )}
 
       {/* Sequência de faixas */}
       <div>
@@ -93,6 +78,8 @@ export default function SetlistView({
                           )
                         : null
                     }
+                    analysisA={analyses?.[track.id] ?? null}
+                    durationA={durations?.[track.id] ?? 0}
                     isExpanded={expandedTransition === i}
                     onToggle={() =>
                       setExpandedTransition(expandedTransition === i ? null : i)
@@ -104,71 +91,6 @@ export default function SetlistView({
           })}
         </div>
       </div>
-
-      {/* Alerta de incompatibilidade */}
-      {analyses && durations && (
-        <CompatibilityAlert setlist={setlist} analyses={analyses} />
-      )}
-
-      {/* DJ Tip */}
-      {setlist.djTip && (
-        <div style={{
-          padding: '16px 18px',
-          background: 'var(--surface2)',
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-start',
-        }}>
-          <span style={{ fontSize: 20, lineHeight: 1 }}>💡</span>
-          <div>
-            <p style={{
-              fontSize: 11,
-              color: 'var(--muted)',
-              fontFamily: 'var(--font-mono, monospace)',
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-              marginBottom: 6,
-            }}>
-              dica de DJ
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
-              {setlist.djTip}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Peak Moment */}
-      {setlist.peakMoment && (
-        <div style={{
-          padding: '16px 18px',
-          background: 'linear-gradient(135deg, rgba(252, 92, 92, 0.1), rgba(196, 92, 252, 0.1))',
-          border: '1px solid rgba(252, 92, 92, 0.3)',
-          borderRadius: 12,
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-start',
-        }}>
-          <span style={{ fontSize: 20, lineHeight: 1 }}>🔥</span>
-          <div>
-            <p style={{
-              fontSize: 11,
-              color: 'var(--red)',
-              fontFamily: 'var(--font-mono, monospace)',
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-              marginBottom: 6,
-            }}>
-              momento de pico
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
-              {setlist.peakMoment}
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Regenerar */}
       {onRegenerate && (
@@ -197,9 +119,6 @@ export default function SetlistView({
   )
 }
 
-/**
- * Linha de uma faixa do setlist.
- */
 function TrackRow({ track, index }: { track: any; index: number }) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
     : track.energy >= 6 ? 'var(--yellow)'
@@ -296,19 +215,178 @@ function TrackRow({ track, index }: { track: any; index: number }) {
   )
 }
 
-/**
- * Linha de transição entre duas faixas.
- */
+const SEGMENT_STYLES: Record<string, { color: string; bg: string; label: string; icon: string }> = {
+  intro:     { color: '#5c9cfc', bg: 'rgba(92, 156, 252, 0.35)',  label: 'intro',     icon: '↓' },
+  inst:      { color: '#7a9ac4', bg: 'rgba(122, 154, 196, 0.35)', label: 'inst',      icon: '▪' },
+  verse:     { color: '#8a8a9a', bg: 'rgba(138, 138, 154, 0.35)', label: 'verse',     icon: '▪' },
+  chorus:    { color: '#c45cfc', bg: 'rgba(196, 92, 252, 0.35)',  label: 'chorus',    icon: '♪' },
+  drop:      { color: '#fc5c5c', bg: 'rgba(252, 92, 92, 0.40)',   label: 'drop',      icon: '🔥' },
+  breakdown: { color: '#fccc5c', bg: 'rgba(252, 204, 92, 0.35)',  label: 'breakdown', icon: '⚡' },
+  outro:     { color: '#4cfc9a', bg: 'rgba(76, 252, 154, 0.35)',  label: 'outro',     icon: '↑' },
+  solo:      { color: '#fc9a5c', bg: 'rgba(252, 154, 92, 0.35)',  label: 'solo',      icon: '♫' },
+  start:     { color: '#5a5a6a', bg: 'rgba(90, 90, 106, 0.35)',   label: 'start',     icon: '·' },
+}
+
+function getSegmentStyle(label: string) {
+  const key = label.toLowerCase()
+  return SEGMENT_STYLES[key] ?? {
+    color: '#7a7a8a',
+    bg: 'rgba(122, 122, 138, 0.30)',
+    label: label,
+    icon: '·',
+  }
+}
+
+function StructureBar({
+  analysis,
+  durationSec,
+  playAtSec,
+  trackTitle,
+}: {
+  analysis: AudioAnalysis
+  durationSec: number
+  playAtSec: number
+  trackTitle: string
+}) {
+  if (!analysis?.segments?.length || durationSec <= 0) {
+    return (
+      <div style={{
+        padding: '10px 12px',
+        background: 'var(--surface2)',
+        borderRadius: 8,
+        fontSize: 11,
+        color: 'var(--muted)',
+        fontFamily: 'var(--font-mono, monospace)',
+        fontStyle: 'italic',
+      }}>
+        estrutura da faixa A não disponível
+      </div>
+    )
+  }
+
+  const merged: AudioSegment[] = []
+  for (const seg of analysis.segments) {
+    const last = merged[merged.length - 1]
+    if (last && last.label === seg.label && Math.abs(last.end - seg.start) < 0.1) {
+      last.end = seg.end
+    } else {
+      merged.push({ ...seg })
+    }
+  }
+
+  const visible = merged.filter(s => s.end - s.start >= 0.5)
+
+  const pct = (sec: number) =>
+    `${Math.min(100, Math.max(0, (sec / durationSec) * 100))}%`
+
+  const playAtPct = pct(playAtSec)
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 6,
+      }}>
+        <p style={{
+          fontSize: 10,
+          color: 'var(--muted)',
+          fontFamily: 'var(--font-mono, monospace)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+        }}>
+          estrutura da faixa A — "{trackTitle}"
+        </p>
+        <p style={{
+          fontSize: 10,
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono, monospace)',
+        }}>
+          ▶ playAt {formatSeconds(playAtSec)}
+        </p>
+      </div>
+
+      <div style={{
+        position: 'relative',
+        height: 28,
+        background: 'var(--surface2)',
+        borderRadius: 6,
+        overflow: 'hidden',
+        display: 'flex',
+      }}>
+        {visible.map((seg, i) => {
+          const style = getSegmentStyle(seg.label)
+          const width = pct(seg.end - seg.start)
+          return (
+            <div
+              key={i}
+              title={`${style.label}: ${formatSeconds(seg.start)} → ${formatSeconds(seg.end)}`}
+              style={{
+                width,
+                height: '100%',
+                background: style.bg,
+                borderRight: i < visible.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 9,
+                color: style.color,
+                fontFamily: 'var(--font-mono, monospace)',
+                fontWeight: 700,
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {width && parseFloat(width) > 4 ? `${style.icon} ${style.label}` : style.icon}
+            </div>
+          )
+        })}
+
+        <div
+          title={`Solte a faixa B aqui: ${formatSeconds(playAtSec)}`}
+          style={{
+            position: 'absolute',
+            left: playAtPct,
+            top: -2,
+            bottom: -2,
+            width: 2,
+            background: 'var(--accent)',
+            boxShadow: '0 0 8px var(--accent)',
+          }}
+        />
+      </div>
+
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        marginTop: 6,
+        fontFamily: 'var(--font-mono, monospace)',
+        fontSize: 10,
+        color: 'var(--muted)',
+      }}>
+        <span>0:00</span>
+        <span>{formatSeconds(durationSec)}</span>
+      </div>
+    </div>
+  )
+}
+
 function TransitionRow({
   from,
   to,
   timeline,
+  analysisA,
+  durationA,
   isExpanded,
   onToggle,
 }: {
   from: any
   to: any
   timeline: MixTimeline | null
+  analysisA: AudioAnalysis | null
+  durationA: number
   isExpanded: boolean
   onToggle: () => void
 }) {
@@ -415,6 +493,15 @@ function TransitionRow({
               padding: '4px 14px 16px',
               borderTop: '1px solid var(--border)',
             }}>
+              {analysisA && durationA > 0 && (
+                <StructureBar
+                  analysis={analysisA}
+                  durationSec={durationA}
+                  playAtSec={timeline.playAtSec}
+                  trackTitle={from.title}
+                />
+              )}
+
               <TimelineVisual timeline={timeline} />
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
@@ -471,9 +558,6 @@ function TransitionRow({
   )
 }
 
-/**
- * Visualização da timeline.
- */
 function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   const totalDuration = Math.max(timeline.crossfadeEndSec + 30, 120)
   const pct = (sec: number) => `${Math.min(100, (sec / totalDuration) * 100)}%`
@@ -551,9 +635,6 @@ function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   )
 }
 
-/**
- * Linha de instrução acionável.
- */
 function Instruction({
   icon,
   color,
@@ -609,83 +690,307 @@ function Instruction({
   )
 }
 
-/**
- * Alerta de incompatibilidade entre transições.
- */
-function CompatibilityAlert({
-  setlist,
-  analyses,
-}: {
-  setlist: GeneratedSetlist
-  analyses: Record<string, AudioAnalysis>
-}) {
-  let incompatibleCount = 0
-  let totalTransitions = 0
+interface TransitionIssue {
+  index: number
+  fromTitle: string
+  toTitle: string
+  severity: 'critical' | 'warning'
+  reason: string
+}
+
+function parseCamelot(key: string): { num: number; letter: 'A' | 'B' } | null {
+  if (!key) return null
+  const match = key.trim().match(/^(\d{1,2})\s*([AB])$/i)
+  if (!match) return null
+  const num = parseInt(match[1], 10)
+  if (num < 1 || num > 12) return null
+  return { num, letter: match[2].toUpperCase() as 'A' | 'B' }
+}
+
+function camelotCompatibility(
+  keyA: string,
+  keyB: string
+): 'perfect' | 'good' | 'humor' | 'bad' | 'unknown' {
+  const a = parseCamelot(keyA)
+  const b = parseCamelot(keyB)
+  if (!a || !b) return 'unknown'
+
+  if (a.num === b.num && a.letter === b.letter) return 'perfect'
+
+  if (a.letter === b.letter) {
+    const diff = Math.abs(a.num - b.num)
+    const wrapDiff = Math.min(diff, 12 - diff)
+    if (wrapDiff === 1) return 'good'
+    if (wrapDiff === 2) return 'good'
+  }
+
+  if (a.num === b.num && a.letter !== b.letter) return 'humor'
+
+  return 'bad'
+}
+
+function analyzeTransitions(
+  setlist: GeneratedSetlist,
+  analyses: Record<string, AudioAnalysis>,
+  durations: Record<string, number>
+): {
+  total: number
+  ok: number
+  issues: TransitionIssue[]
+  criticalCount: number
+  warningCount: number
+} {
+  const issues: TransitionIssue[] = []
+  let total = 0
+  let ok = 0
 
   for (let i = 0; i < setlist.setlist.length - 1; i++) {
     const a = setlist.setlist[i]
     const b = setlist.setlist[i + 1]
-    if (!analyses[a.id] || !analyses[b.id]) continue
-    totalTransitions++
+    total++
 
-    const bpmDiff = Math.abs((a.bpm || 0) - (b.bpm || 0))
-    if (bpmDiff > 10) incompatibleCount++
+    if (!analyses[a.id] || !analyses[b.id]) {
+      issues.push({
+        index: i,
+        fromTitle: a.title,
+        toTitle: b.title,
+        severity: 'critical',
+        reason: 'faixa sem análise estrutural (timeline indisponível)',
+      })
+      continue
+    }
+
+    let worstSeverity: 'ok' | 'warning' | 'critical' = 'ok'
+    const reasons: string[] = []
+
+    const bpmA = a.bpm || 0
+    const bpmB = b.bpm || 0
+    const bpmForA = bpmA > 0 ? bpmA : bpmB
+    const bpmForB = bpmB > 0 ? bpmB : bpmA
+
+    // 1. BPM
+    if (bpmA > 0 && bpmB > 0) {
+      const bpmDiff = Math.abs(bpmA - bpmB)
+      if (bpmDiff > 10) {
+        worstSeverity = 'critical'
+        reasons.push(`BPM salta de ${bpmA} para ${bpmB} (+${bpmDiff})`)
+      } else if (bpmDiff > 6) {
+        if (worstSeverity !== 'critical') worstSeverity = 'warning'
+        reasons.push(`BPM varia ${bpmA} → ${bpmB} (+${bpmDiff})`)
+      }
+    }
+
+    // 2. Camelot
+    const camelot = camelotCompatibility(a.key || '', b.key || '')
+    if (camelot === 'bad') {
+      worstSeverity = 'critical'
+      reasons.push(`Camelot ${a.key} → ${b.key} (distante)`)
+    } else if (camelot === 'humor') {
+      if (worstSeverity !== 'critical') worstSeverity = 'warning'
+      reasons.push(`Camelot ${a.key} → ${b.key} (muda o humor)`)
+    }
+
+   // 3. Estrutura — intro curto da faixa B
+const analysisB = analyses[b.id]
+if (analysisB?.segments && bpmForB > 0) {
+  const introSegs = analysisB.segments.filter(s => s.label.toLowerCase() === 'intro')
+  // Só alerta se o intro EXISTE e é curto.
+  // Se não tem intro, não alerta (comportamento normal em EDM).
+  if (introSegs.length > 0) {
+    const totalIntroSec = introSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
+    const barDuration = (60 / bpmForB) * 4
+    const introBars = totalIntroSec / barDuration
+    if (introBars < 4) {
+      if (worstSeverity !== 'critical') worstSeverity = 'warning'
+      reasons.push(`intro da faixa B é muito curto (~${Math.round(introBars)} barras)`)
+    }
+  }
+}
+
+    // 4. Estrutura — outro da faixa A (com fallback inteligente)
+    const analysisA = analyses[a.id]
+    const durA = durations[a.id] || 0
+    if (analysisA?.segments && durA > 0 && bpmForA > 0) {
+      const outroSegs = analysisA.segments.filter(s => s.label.toLowerCase() === 'outro')
+      if (outroSegs.length > 0) {
+        const totalOutroSec = outroSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
+        const barDuration = (60 / bpmForA) * 4
+        const outroBars = totalOutroSec / barDuration
+        if (outroBars < 4) {
+          if (worstSeverity !== 'critical') worstSeverity = 'warning'
+          reasons.push(`outro da faixa A é muito curto (~${Math.round(outroBars)} barras)`)
+        }
+      } else {
+        // Sem "outro" explícito — só alerta se NÃO houver fallback válido
+        const hasFallback = analysisA.segments.some(s => {
+          const label = s.label.toLowerCase()
+          return ['outro', 'breakdown', 'drop', 'chorus', 'verse'].includes(label)
+        })
+        if (!hasFallback) {
+          if (worstSeverity !== 'critical') worstSeverity = 'warning'
+          reasons.push('faixa A sem ponto de saída claro (sem outro/breakdown/drop/chorus)')
+        }
+        // Se tiver fallback, o calculateMixTimeline resolve — não alerta
+      }
+    }
+
+    if (worstSeverity === 'ok') {
+      ok++
+    } else {
+      issues.push({
+        index: i,
+        fromTitle: a.title,
+        toTitle: b.title,
+        severity: worstSeverity,
+        reason: reasons.join(' · '),
+      })
+    }
   }
 
-  if (totalTransitions === 0) return null
+  return {
+    total,
+    ok,
+    issues,
+    criticalCount: issues.filter(x => x.severity === 'critical').length,
+    warningCount: issues.filter(x => x.severity === 'warning').length,
+  }
+}
 
-  const allBad = incompatibleCount === totalTransitions
-  const someBad = incompatibleCount > 0
+function CompatibilityAlert({
+  setlist,
+  analyses,
+  durations,
+}: {
+  setlist: GeneratedSetlist
+  analyses: Record<string, AudioAnalysis>
+  durations: Record<string, number>
+}) {
+  const result = analyzeTransitions(setlist, analyses, durations)
 
-  if (!someBad) {
+  if (result.total === 0) return null
+
+  const { total, ok, issues, criticalCount, warningCount } = result
+
+  if (issues.length === 0) {
     return (
       <div style={{
-        padding: '12px 16px',
+        padding: '14px 18px',
         background: 'rgba(76, 252, 154, 0.08)',
-        border: '1px solid rgba(76, 252, 154, 0.3)',
-        borderRadius: 10,
+        border: '1px solid rgba(76, 252, 154, 0.35)',
+        borderRadius: 12,
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
+        gap: 12,
       }}>
-        <span style={{ fontSize: 16 }}>✓</span>
-        <span style={{ fontSize: 13, color: 'var(--green)' }}>
-          Todas as transições são mixáveis
-        </span>
+        <span style={{ fontSize: 20 }}>✓</span>
+        <div>
+          <p style={{
+            fontSize: 12,
+            color: 'var(--green)',
+            fontFamily: 'var(--font-mono, monospace)',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            marginBottom: 2,
+          }}>
+            set pronto pra tocar
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--text)' }}>
+            As {total} transições são mixáveis — BPM, Camelot e estrutura alinhados.
+          </p>
+        </div>
       </div>
     )
   }
 
+  const hasCritical = criticalCount > 0
+
   return (
     <div style={{
-      padding: '14px 16px',
-      background: allBad ? 'rgba(252, 92, 92, 0.1)' : 'rgba(252, 204, 92, 0.1)',
-      border: `1px solid ${allBad ? 'rgba(252, 92, 92, 0.4)' : 'rgba(252, 204, 92, 0.4)'}`,
-      borderRadius: 10,
+      padding: '16px 18px',
+      background: hasCritical ? 'rgba(252, 92, 92, 0.08)' : 'rgba(252, 204, 92, 0.08)',
+      border: `1px solid ${hasCritical ? 'rgba(252, 92, 92, 0.4)' : 'rgba(252, 204, 92, 0.4)'}`,
+      borderRadius: 12,
       display: 'flex',
+      flexDirection: 'column',
       gap: 12,
-      alignItems: 'flex-start',
     }}>
-      <span style={{ fontSize: 18, lineHeight: 1 }}>
-        {allBad ? '✗' : '⚠'}
-      </span>
-      <div>
-        <p style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: allBad ? 'var(--red)' : 'var(--yellow)',
-          marginBottom: 4,
-          fontFamily: 'var(--font-mono, monospace)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.5,
-        }}>
-          {allBad ? 'set não recomendado' : 'atenção nas transições'}
-        </p>
-        <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>
-          {allBad
-            ? `Nenhuma das ${totalTransitions} transições combina bem. O setlist será difícil de mixar — considere adicionar músicas de BPM similar.`
-            : `${incompatibleCount} de ${totalTransitions} transições têm diferença de BPM alta (>10). Verifique antes de tocar.`}
-        </p>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 20, lineHeight: 1 }}>
+          {hasCritical ? '✗' : '⚠'}
+        </span>
+        <div style={{ flex: 1 }}>
+          <p style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: hasCritical ? 'var(--red)' : 'var(--yellow)',
+            marginBottom: 4,
+            fontFamily: 'var(--font-mono, monospace)',
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+          }}>
+            {hasCritical
+              ? `${criticalCount} transiç${criticalCount === 1 ? 'ão' : 'ões'} problemática${criticalCount === 1 ? '' : 's'} — evite ao vivo`
+              : `${warningCount} transiç${warningCount === 1 ? 'ão' : 'ões'} pede${warningCount === 1 ? '' : 'm'} atenção`}
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>
+            {ok} de {total} transições são mixáveis.
+            {hasCritical && ' Revise antes de tocar.'}
+          </p>
+        </div>
+      </div>
+
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        paddingLeft: 32,
+      }}>
+        {issues.map((issue, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              padding: '8px 12px',
+              background: 'var(--surface)',
+              border: `1px solid ${issue.severity === 'critical' ? 'rgba(252, 92, 92, 0.3)' : 'rgba(252, 204, 92, 0.3)'}`,
+              borderRadius: 8,
+              fontSize: 12,
+            }}
+          >
+            <span style={{
+              color: issue.severity === 'critical' ? 'var(--red)' : 'var(--yellow)',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontWeight: 700,
+              flexShrink: 0,
+              minWidth: 60,
+            }}>
+              {issue.index + 1} → {issue.index + 2}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{
+                fontSize: 11,
+                color: 'var(--muted)',
+                fontFamily: 'var(--font-mono, monospace)',
+                marginBottom: 2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {issue.fromTitle} → {issue.toTitle}
+              </p>
+              <p style={{
+                fontSize: 12,
+                color: 'var(--text)',
+                lineHeight: 1.4,
+              }}>
+                {issue.reason}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

@@ -46,14 +46,12 @@ export default function TrackUpload({
   const cancelRef = useRef(false)
   const processingRef = useRef(false)
 
-  // Cleanup no unmount
   useEffect(() => {
     return () => {
       cancelRef.current = true
     }
   }, [])
 
-  // 🔁 Fila serial: processa um por vez
   useEffect(() => {
     if (processingRef.current) return
     const next = queue.find(q => q.status === 'pending')
@@ -63,16 +61,17 @@ export default function TrackUpload({
     cancelRef.current = false
     processItem(next).finally(() => {
       processingRef.current = false
-      setQueue(prev => [...prev])  // força re-render pra puxar o próximo
+      setQueue(prev => [...prev])
     })
   }, [queue])
 
   const processItem = async (item: QueueItem) => {
-    // 1. BPM local
+    // 1. BPM local (client-side, music-tempo)
     setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'analyzing-bpm' } : q))
 
     let detectedBpm: number | null = null
     let durationSec = 0
+    let bpmLocalFailed = false
 
     try {
       const arrayBuffer = await item.file.arrayBuffer()
@@ -99,12 +98,9 @@ export default function TrackUpload({
       detectedBpm = Math.round(mt.tempo)
       await audioContext.close()
     } catch (error) {
-      console.error(`[TrackUpload] Erro BPM em "${item.file.name}":`, error)
-      setQueue(prev => prev.map(q => q.id === item.id
-        ? { ...q, status: 'error', error: 'Erro ao analisar BPM' }
-        : q
-      ))
-      return
+      console.warn(`[TrackUpload] BPM local falhou para "${item.file.name}". Vai seguir pro Python.`, error)
+      bpmLocalFailed = true
+      // Não descarta — vai pro Python mesmo assim. O Python detecta BPM via GPU.
     }
 
     if (cancelRef.current) {
@@ -112,7 +108,7 @@ export default function TrackUpload({
       return
     }
 
-    // 2. Cria a faixa e adiciona na biblioteca
+    // 2. Cria a faixa (BPM pode ser 0 — o Python corrige depois)
     const newTrack: Track = {
       id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: item.file.name.replace(/\.[^/.]+$/, ''),
@@ -183,7 +179,10 @@ export default function TrackUpload({
 
       if (finalResult) {
         if (onAddAnalysis) onAddAnalysis(newTrack.id, finalResult, durationSec)
-        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done' } : q))
+        setQueue(prev => prev.map(q => q.id === item.id
+          ? { ...q, status: 'done', bpm: finalResult.bpm ?? detectedBpm ?? 0 }
+          : q
+        ))
       } else {
         setQueue(prev => prev.map(q => q.id === item.id
           ? { ...q, status: 'error', error: 'Timeout na análise' }
@@ -233,7 +232,6 @@ export default function TrackUpload({
     cancelled: queue.filter(q => q.status === 'cancelled').length,
   }
 
-  // 📣 Avisa o pai sempre que a fila mudar
   useEffect(() => {
     if (onQueueChange) {
       onQueueChange({
@@ -250,7 +248,6 @@ export default function TrackUpload({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* Área de upload */}
       <div
         onClick={() => fileInputRef.current?.click()}
         style={{
@@ -279,7 +276,6 @@ export default function TrackUpload({
         </p>
       </div>
 
-      {/* Barra de progresso geral */}
       {stats.total > 0 && (
         <div style={{
           padding: '12px 14px',
@@ -356,7 +352,6 @@ export default function TrackUpload({
         </div>
       )}
 
-      {/* Lista da fila */}
       {queue.length > 0 && (
         <div style={{
           display: 'flex',
@@ -371,7 +366,6 @@ export default function TrackUpload({
         </div>
       )}
 
-      {/* Compatibilidade */}
       {compatible.length > 0 && (
         <div style={{
           padding: '12px 14px',
@@ -452,7 +446,7 @@ function QueueRow({ item }: { item: QueueItem }) {
       }}>
         {item.file.name}
       </span>
-      {item.bpm !== undefined && (
+      {item.bpm !== undefined && item.bpm > 0 && (
         <span style={{ color: 'var(--muted)', fontSize: 11 }}>
           {item.bpm} BPM
         </span>

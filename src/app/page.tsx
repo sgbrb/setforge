@@ -69,14 +69,25 @@ export default function Home() {
     setSetlist(null)
   }
 
-  // Recebe a análise estrutural do TrackUpload
+    // Recebe a análise estrutural do TrackUpload
   const handleAddAnalysis = (
     trackId: string,
-    analysis: AudioAnalysis,
+    analysis: AudioAnalysis & { key?: string; bpm?: number },
     durationSec: number
   ) => {
     setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
     setDurations(prev => ({ ...prev, [trackId]: durationSec }))
+
+    // 🔑 Atualiza key E bpm da faixa com o que veio da análise
+    setTracks(prev => prev.map(t => {
+      if (t.id !== trackId) return t
+      return {
+        ...t,
+        key: analysis.key || t.key,
+        // Só sobrescreve o BPM se a análise trouxe um valor válido
+        bpm: analysis.bpm && analysis.bpm > 0 ? analysis.bpm : t.bpm,
+      }
+    }))
   }
 
   const generate = async () => {

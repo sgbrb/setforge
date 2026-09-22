@@ -11,7 +11,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 
-// ⏱ Timeout de segurança: se o modelo não responder em 90s, cancela
+// ⏱ Timeout de segurança
 const TIMEOUT_MS = 90_000
 
 interface GenerateRequest {
@@ -19,17 +19,8 @@ interface GenerateRequest {
   config: SetConfig
 }
 
-/**
- * Normaliza um título para comparação tolerante.
- * - minúsculas
- * - remove espaços extras
- * - remove acentos (opcional)
- */
 function normalizeTitle(s: string): string {
-  return (s || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ')
+  return (s || '').toLowerCase().trim().replace(/\s+/g, ' ')
 }
 
 export async function POST(req: NextRequest) {
@@ -48,20 +39,29 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Prompt para o modelo
+    // 🔹 Prompt — obriga usar TODAS as faixas
     const systemPrompt = `Você é um DJ profissional e curador musical com décadas de experiência.
 Sua tarefa é criar um setlist harmônico e tecnicamente viável.
 
 Regras que você DEVE seguir:
-1. BPM: A diferença entre faixas consecutivas deve ser de no máximo ±3 BPM (ideal) ou ±6 BPM (aceitável).
-2. Tom (Camelot): Priorize transições entre:
+
+1. USE TODAS as ${tracks.length} faixas fornecidas. NÃO descarte nenhuma.
+   Se alguma faixa não encaixar harmonicamente, coloque-a na posição que
+   minimize o dano (ex: no final do set, ou entre duas faixas compatíveis).
+
+2. BPM: A diferença entre faixas consecutivas deve ser de no máximo ±3 BPM
+   (ideal) ou ±6 BPM (aceitável). Saltos maiores são permitidos apenas se
+   forem inevitáveis (ex: a faixa mais distante foi colocada no final).
+
+3. Tom (Camelot): Priorize transições entre:
    - Mesmo código Camelot (ex: 8A → 8A) — match perfeito
    - Números adjacentes, mesma letra (ex: 8A → 9A ou 7A) — muito suave
    - Mesmo número, letra diferente (ex: 8A → 8B) — muda o humor
-3. Curva de energia: Respeite a curva solicitada no contexto.
-4. Duração: Calcule a duração aproximada do set.
 
-IMPORTANTE: NÃO invente faixas. Use APENAS as faixas fornecidas na lista. Copie o "title" EXATAMENTE como está na lista.
+4. Curva de energia: Respeite a curva solicitada no contexto.
+
+IMPORTANTE: NÃO invente faixas. Use APENAS as faixas fornecidas na lista.
+Copie o "title" EXATAMENTE como está na lista.
 
 Retorne APENAS um JSON válido no formato:
 {
@@ -75,10 +75,7 @@ Retorne APENAS um JSON válido no formato:
       "energy": 7,
       "transitionNote": "Nota sobre a transição para a próxima faixa"
     }
-  ],
-  "analysis": "Análise geral do setlist explicando as escolhas harmônicas",
-  "djTip": "Dica prática de DJ para este set",
-  "peakMoment": "Descrição do momento de pico do set"
+  ]
 }`
 
     const userPrompt = `Contexto do set:
@@ -87,15 +84,14 @@ Retorne APENAS um JSON válido no formato:
 - Curva de energia: ${config.energyCurve}
 - Público: ${config.audience || 'Não especificado'}
 
-Faixas disponíveis na biblioteca do DJ (${tracks.length} faixas):
+Faixas disponíveis na biblioteca do DJ (${tracks.length} faixas — use TODAS):
 ${tracks.map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || '?'}, Tom: ${t.key || '?'}, Energia: ${t.energy}/10)`).join('\n')}
 
-Monte o melhor setlist possível usando essas faixas, respeitando as regras de compatibilidade harmônica (BPM e Camelot).`
+Monte o melhor setlist possível usando TODAS as faixas, respeitando as regras
+de compatibilidade harmônica (BPM e Camelot).`
 
-    // 🎯 Modelo fixo
     const MODEL = 'cohere/north-mini-code:free'
 
-    // ⏱ Timeout via AbortController
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
@@ -146,14 +142,12 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
       )
     }
 
-    // Extrai JSON da resposta (o modelo pode envolver em ```json ... ```)
     let cleanJson = responseText.trim()
     if (cleanJson.startsWith('```')) {
       cleanJson = cleanJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     }
 
     console.log(`[SetForge] JSON limpo: ${cleanJson.length} chars`)
-    console.log(`[SetForge] Últimos 200 chars: ${cleanJson.slice(-200)}`)
 
     let parsed
     try {
@@ -178,26 +172,21 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
     }
 
     // 🔑 REINJETA O ID DAS FAIXAS ORIGINAIS
-    // O OpenRouter não conhece o `id` (é interno do front). A gente cruza
-    // cada faixa do setlist com a faixa original (por title + bpm) e reinjeta.
     if (Array.isArray(parsed.setlist)) {
       const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
         const normTitle = normalizeTitle(setlistTrack.title)
         const setlistBpm = Number(setlistTrack.bpm)
 
-        // Match 1: title + bpm (mais forte)
         let original = tracks.find(
           (t) =>
             normalizeTitle(t.title) === normTitle &&
             Math.abs((t.bpm || 0) - setlistBpm) <= 1
         )
 
-        // Match 2: só title (caso o BPM tenha vindo diferente)
         if (!original) {
           original = tracks.find((t) => normalizeTitle(t.title) === normTitle)
         }
 
-        // Match 3: title parcial (o modelo pode truncar títulos longos)
         if (!original) {
           original = tracks.find(
             (t) =>
@@ -222,7 +211,14 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
       parsed.setlist = tracksWithIds
     }
 
-    // Salva no banco
+    // ⚠️ Aviso se o OpenRouter descartou faixas
+    if (parsed.setlist.length < tracks.length) {
+      console.warn(
+        `[SetForge] OpenRouter usou ${parsed.setlist.length} de ${tracks.length} faixas ` +
+        `(${tracks.length - parsed.setlist.length} descartadas)`
+      )
+    }
+
     const setlist = await prisma.setlist.create({
       data: {
         name: `Set ${config.eventType} - ${new Date().toLocaleDateString('pt-BR')}`,
@@ -230,9 +226,9 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
         duration: config.duration,
         energyCurve: config.energyCurve,
         audience: config.audience,
-        analysis: parsed.analysis,
-        djTip: parsed.djTip,
-        peakMoment: parsed.peakMoment,
+        analysis: null,
+        djTip: null,
+        peakMoment: null,
         totalDuration: parsed.setlist?.length?.toString() || '0',
         userId: session.user.id,
         tracks: {
@@ -250,7 +246,7 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
     })
 
     return NextResponse.json({
-      ...parsed,
+      setlist: parsed.setlist,
       id: setlist.id,
     })
   } catch (error) {
