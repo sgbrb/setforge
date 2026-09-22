@@ -43,3 +43,14 @@ __pycache__/
 
 # debug
 teste_torchcodec.py
+
+# Python / Demucs temporários
+spec/
+demix/
+*.npy
+__pycache__/
+
+# Scripts de debug
+teste_*.py
+teste_*.txt
+pacotes.txt

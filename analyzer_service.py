@@ -1,47 +1,32 @@
 # analyzer_service.py
+import os
+
+# 🔑 Variáveis de ambiente — ANTES de qualquer import
+os.environ["TORCHAUDIO_USE_BACKEND"] = "soundfile"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 from typing import Dict
 import tempfile
-import os
 import time
 import uuid
 import traceback
 
-# 🔑 CRÍTICO: define o PATH pro FFmpeg *shared* ANTES de importar torchcodec.
-# O torchcodec precisa das DLLs (avcodec-XX.dll, etc.) — o ffmpeg.exe "essentials"
-# NÃO tem essas DLLs. Por isso precisamos do build "shared".
-FFMPEG_SHARED_BIN = r"C:\Users\BGS13627\Desktop\EngComp\dlsss\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
+# 🔑 FFmpeg 7 shared
+FFMPEG_SHARED_BIN = r"C:\ffmpeg\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
 
 if os.path.isdir(FFMPEG_SHARED_BIN):
+    os.add_dll_directory(FFMPEG_SHARED_BIN)
     os.environ["PATH"] = FFMPEG_SHARED_BIN + os.pathsep + os.environ.get("PATH", "")
-    print(f"[startup] PATH atualizado com: {FFMPEG_SHARED_BIN}")
+    print(f"[startup] FFmpeg bin: {FFMPEG_SHARED_BIN}")
 else:
     print(f"[AVISO] FFmpeg shared não encontrado em: {FFMPEG_SHARED_BIN}")
-    print("[AVISO] O torchcodec pode falhar ao decodificar MP3.")
 
-JOBS: Dict[str, dict] = {}
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("[startup] Warmup: importando allin1_infer.analyze...")
-    try:
-        from torchcodec._core import ops
-        from torchcodec.decoders import AudioDecoder  # noqa: F401
-        print(f"[startup] torchcodec OK — FFmpeg major: {ops.ffmpeg_major_version}")
-        print(f"[startup] FFmpeg path: {ops.ffmpeg_path}")
-
-        from allin1_infer import analyze  # noqa: F401
-        print("[startup] OK. Servidor pronto.")
-    except Exception as e:
-        print(f"[startup] Aviso warmup: {e}")
-    yield
-    print("[shutdown] Encerrando analyzer_service.")
-
-
-app = FastAPI(title="SetForge Audio Analyzer", lifespan=lifespan)
+# 🚀 App SEM lifespan (evita travamento no startup)
+app = FastAPI(title="SetForge Audio Analyzer")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +34,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+JOBS: Dict[str, dict] = {}
 
 
 @app.get("/health")
@@ -62,8 +49,16 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
         JOBS[job_id]["status"] = "processing"
         t0 = time.time()
 
+        import torch
+        torch.set_default_device("cuda")
+
         from allin1_infer import analyze
-        result = analyze(tmp_path)
+        result = analyze(
+    tmp_path,
+    device="cuda",
+    demucs_fp16=True,
+    demucs_overlap=0.1,
+)
 
         elapsed = time.time() - t0
         print(f"[job {job_id}] Concluído em {elapsed:.1f}s — BPM {result.bpm}, {len(result.segments)} segmentos")

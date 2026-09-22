@@ -19,6 +19,19 @@ interface GenerateRequest {
   config: SetConfig
 }
 
+/**
+ * Normaliza um título para comparação tolerante.
+ * - minúsculas
+ * - remove espaços extras
+ * - remove acentos (opcional)
+ */
+function normalizeTitle(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -47,6 +60,8 @@ Regras que você DEVE seguir:
    - Mesmo número, letra diferente (ex: 8A → 8B) — muda o humor
 3. Curva de energia: Respeite a curva solicitada no contexto.
 4. Duração: Calcule a duração aproximada do set.
+
+IMPORTANTE: NÃO invente faixas. Use APENAS as faixas fornecidas na lista. Copie o "title" EXATAMENTE como está na lista.
 
 Retorne APENAS um JSON válido no formato:
 {
@@ -77,8 +92,7 @@ ${tracks.map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || 
 
 Monte o melhor setlist possível usando essas faixas, respeitando as regras de compatibilidade harmônica (BPM e Camelot).`
 
-    // 🎯 Modelo fixo em vez do roteador aleatório
-    // 'google/gemini-2.0-flash-exp:free' é rápido, confiável e gratuito
+    // 🎯 Modelo fixo
     const MODEL = 'cohere/north-mini-code:free'
 
     // ⏱ Timeout via AbortController
@@ -138,7 +152,6 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
       cleanJson = cleanJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     }
 
-    // Diagnóstico de tamanho
     console.log(`[SetForge] JSON limpo: ${cleanJson.length} chars`)
     console.log(`[SetForge] Últimos 200 chars: ${cleanJson.slice(-200)}`)
 
@@ -146,7 +159,6 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
     try {
       parsed = JSON.parse(cleanJson)
     } catch (parseError) {
-      // Tentativa de reparo: extrai o primeiro { até o último }
       const firstBrace = cleanJson.indexOf('{')
       const lastBrace = cleanJson.lastIndexOf('}')
       if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
@@ -163,6 +175,51 @@ Monte o melhor setlist possível usando essas faixas, respeitando as regras de c
       } else {
         throw parseError
       }
+    }
+
+    // 🔑 REINJETA O ID DAS FAIXAS ORIGINAIS
+    // O OpenRouter não conhece o `id` (é interno do front). A gente cruza
+    // cada faixa do setlist com a faixa original (por title + bpm) e reinjeta.
+    if (Array.isArray(parsed.setlist)) {
+      const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
+        const normTitle = normalizeTitle(setlistTrack.title)
+        const setlistBpm = Number(setlistTrack.bpm)
+
+        // Match 1: title + bpm (mais forte)
+        let original = tracks.find(
+          (t) =>
+            normalizeTitle(t.title) === normTitle &&
+            Math.abs((t.bpm || 0) - setlistBpm) <= 1
+        )
+
+        // Match 2: só title (caso o BPM tenha vindo diferente)
+        if (!original) {
+          original = tracks.find((t) => normalizeTitle(t.title) === normTitle)
+        }
+
+        // Match 3: title parcial (o modelo pode truncar títulos longos)
+        if (!original) {
+          original = tracks.find(
+            (t) =>
+              normalizeTitle(t.title).includes(normTitle) ||
+              normTitle.includes(normalizeTitle(t.title))
+          )
+        }
+
+        if (original) {
+          console.log(`[SetForge] Match OK: "${setlistTrack.title}" → id=${original.id}`)
+        } else {
+          console.warn(`[SetForge] SEM MATCH: "${setlistTrack.title}" (BPM ${setlistTrack.bpm})`)
+        }
+
+        return {
+          ...setlistTrack,
+          id: original?.id ?? `gen-${Math.random().toString(36).slice(2, 10)}`,
+          artist: original?.artist || setlistTrack.artist || '',
+        }
+      })
+
+      parsed.setlist = tracksWithIds
     }
 
     // Salva no banco

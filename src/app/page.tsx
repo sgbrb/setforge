@@ -7,6 +7,14 @@ import SetlistView from '@/components/SetlistView'
 import { findCompatibleTracks } from '@/lib/harmonic-utils'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 
+interface QueueStats {
+  total: number
+  done: number
+  pending: number
+  processing: number
+  errors: number
+}
+
 export default function Home() {
   const { status } = useSession()
 
@@ -24,6 +32,9 @@ export default function Home() {
   const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
   const [durations, setDurations] = useState<Record<string, number>>({})
 
+  // Estado da fila de upload (refletido no badge do painel)
+  const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
+
   // 🔒 Se não estiver logado, redireciona
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -35,7 +46,28 @@ export default function Home() {
     setTracks(prev => prev.find(t => t.id === track.id) ? prev : [...prev, track])
   }
 
-  const removeTrack = (id: string) => setTracks(prev => prev.filter(t => t.id !== id))
+  // Remove a faixa E a análise associada (evita lixo em memória)
+  const removeTrack = (id: string) => {
+    setTracks(prev => prev.filter(t => t.id !== id))
+    setAnalyses(prev => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setDurations(prev => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
+
+  // Limpa tudo: faixas + análises + durações
+  const clearLibrary = () => {
+    setTracks([])
+    setAnalyses({})
+    setDurations({})
+    setSetlist(null)
+  }
 
   // Recebe a análise estrutural do TrackUpload
   const handleAddAnalysis = (
@@ -84,6 +116,17 @@ export default function Home() {
       setLoading(false)
     }
   }
+
+  // Badge do painel "biblioteca" — mostra faixas + progresso da fila
+  const libraryBadge = (() => {
+    const base = `${tracks.length} faixa${tracks.length !== 1 ? 's' : ''}`
+    if (queueStats && (queueStats.processing > 0 || queueStats.pending > 0)) {
+      const total = queueStats.total
+      const done = queueStats.done
+      return `${base} · ⟳ ${done}/${total}`
+    }
+    return base
+  })()
 
   if (status === 'loading') {
     return (
@@ -236,17 +279,18 @@ export default function Home() {
         </Panel>
 
         {/* Library */}
-        <Panel title="biblioteca de músicas" badge={`${tracks.length} faixa${tracks.length !== 1 ? 's' : ''}`}>
+        <Panel title="biblioteca de músicas" badge={libraryBadge}>
           <TrackUpload
             onAddTrack={addTrack}
             onAddAnalysis={handleAddAnalysis}
+            onQueueChange={setQueueStats}
             libraryTracks={tracks}
           />
 
           {tracks.length > 0 && (
             <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
               <button
-                onClick={() => setTracks([])}
+                onClick={clearLibrary}
                 style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
               >
                 limpar biblioteca

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import MusicTempo from 'music-tempo'
 import { Track } from '@/lib/types'
 import { findCompatibleTracks } from '@/lib/harmonic-utils'
@@ -9,45 +9,73 @@ import { AudioAnalysis } from '@/lib/mix-timeline'
 interface TrackUploadProps {
   onAddTrack?: (track: Track) => void
   onAddAnalysis?: (trackId: string, analysis: AudioAnalysis, durationSec: number) => void
+  onQueueChange?: (stats: {
+    total: number
+    done: number
+    pending: number
+    processing: number
+    errors: number
+  }) => void
   libraryTracks?: Track[]
 }
 
+type FileStatus = 'pending' | 'analyzing-bpm' | 'analyzing-structure' | 'done' | 'error' | 'cancelled'
+
+interface QueueItem {
+  id: string
+  file: File
+  status: FileStatus
+  bpm?: number
+  trackId?: string
+  error?: string
+  progress?: number
+}
+
 const POLL_INTERVAL_MS = 3000
-const MAX_POLL_ATTEMPTS = 200  // ~10 minutos de tolerância
+const MAX_POLL_ATTEMPTS = 400  // ~20 minutos por faixa
 
 export default function TrackUpload({
   onAddTrack,
   onAddAnalysis,
+  onQueueChange,
   libraryTracks = [],
 }: TrackUploadProps) {
-  const [bpm, setBpm] = useState<number | null>(null)
-  const [fileName, setFileName] = useState<string>('')
-  const [analyzing, setAnalyzing] = useState(false)
-  const [analyzingStructure, setAnalyzingStructure] = useState(false)
-  const [structureOk, setStructureOk] = useState(false)
-  const [jobStatus, setJobStatus] = useState<string>('')
+  const [queue, setQueue] = useState<QueueItem[]>([])
   const [compatible, setCompatible] = useState<Array<{ track: Track; score: number }>>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cancelRef = useRef(false)
+  const processingRef = useRef(false)
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+  // Cleanup no unmount
+  useEffect(() => {
+    return () => {
+      cancelRef.current = true
+    }
+  }, [])
 
-    console.log('[TrackUpload] arquivo selecionado:', file.name)
+  // 🔁 Fila serial: processa um por vez
+  useEffect(() => {
+    if (processingRef.current) return
+    const next = queue.find(q => q.status === 'pending')
+    if (!next) return
 
-    setFileName(file.name)
-    setBpm(null)
-    setCompatible([])
-    setStructureOk(false)
-    setJobStatus('')
-    setAnalyzing(true)
-    setAnalyzingStructure(false)
+    processingRef.current = true
+    cancelRef.current = false
+    processItem(next).finally(() => {
+      processingRef.current = false
+      setQueue(prev => [...prev])  // força re-render pra puxar o próximo
+    })
+  }, [queue])
+
+  const processItem = async (item: QueueItem) => {
+    // 1. BPM local
+    setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'analyzing-bpm' } : q))
 
     let detectedBpm: number | null = null
     let durationSec = 0
 
     try {
-      const arrayBuffer = await file.arrayBuffer()
+      const arrayBuffer = await item.file.arrayBuffer()
       const audioContext = new AudioContext({ sampleRate: 44100 })
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
       durationSec = audioBuffer.duration
@@ -69,20 +97,25 @@ export default function TrackUpload({
         maxBeatInterval: 60 / 90,
       })
       detectedBpm = Math.round(mt.tempo)
-      setBpm(detectedBpm)
       await audioContext.close()
     } catch (error) {
-      console.error('[TrackUpload] Erro BPM:', error)
-      alert('Não foi possível analisar o BPM deste arquivo.')
-      setAnalyzing(false)
+      console.error(`[TrackUpload] Erro BPM em "${item.file.name}":`, error)
+      setQueue(prev => prev.map(q => q.id === item.id
+        ? { ...q, status: 'error', error: 'Erro ao analisar BPM' }
+        : q
+      ))
       return
     }
 
-    setAnalyzing(false)
+    if (cancelRef.current) {
+      setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'cancelled' } : q))
+      return
+    }
 
+    // 2. Cria a faixa e adiciona na biblioteca
     const newTrack: Track = {
-      id: `upload-${Date.now()}`,
-      title: file.name.replace(/\.[^/.]+$/, ''),
+      id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      title: item.file.name.replace(/\.[^/.]+$/, ''),
       artist: '',
       bpm: detectedBpm ?? 0,
       key: '',
@@ -95,94 +128,129 @@ export default function TrackUpload({
       setCompatible(matches)
     }
 
-    if (onAddTrack) {
-      onAddTrack(newTrack)
-    }
+    if (onAddTrack) onAddTrack(newTrack)
 
-    // 🎧 Análise estrutural assíncrona
-    setAnalyzingStructure(true)
-    setJobStatus('criando job...')
+    setQueue(prev => prev.map(q => q.id === item.id
+      ? { ...q, status: 'analyzing-structure', bpm: detectedBpm ?? 0, trackId: newTrack.id }
+      : q
+    ))
 
+    // 3. Análise estrutural (job + polling)
     try {
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', item.file)
 
-      console.log(`[TrackUpload] POST /api/analyze-track para "${file.name}"...`)
-      const res = await fetch('/api/analyze-track', {
-        method: 'POST',
-        body: fd,
-      })
-
+      const res = await fetch('/api/analyze-track', { method: 'POST', body: fd })
       if (!res.ok) {
-        const txt = await res.text().catch(() => '')
-        console.error('[TrackUpload] POST falhou:', res.status, txt.slice(0, 300))
-        setJobStatus(`erro ${res.status}`)
-        setAnalyzingStructure(false)
-        return
+        throw new Error(`POST falhou: ${res.status}`)
       }
 
       const { job_id } = await res.json()
-      console.log(`[TrackUpload] Job criado: ${job_id}. Iniciando polling...`)
-      setJobStatus('processando...')
 
-      // 🔁 Polling
       let attempts = 0
       let finalResult: AudioAnalysis | null = null
 
       while (attempts < MAX_POLL_ATTEMPTS) {
+        if (cancelRef.current) {
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'cancelled' } : q))
+          return
+        }
+
         await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
         attempts++
 
         try {
           const pollRes = await fetch(`/api/analyze-track?jobId=${job_id}`)
-          if (!pollRes.ok) {
-            console.warn(`[TrackUpload] Poll ${attempts} falhou: ${pollRes.status}`)
-            continue
-          }
-
+          if (!pollRes.ok) continue
           const data = await pollRes.json()
 
           if (data.status === 'done' && data.result) {
             finalResult = data.result as AudioAnalysis
-            console.log(
-              `[TrackUpload] Análise OK após ${attempts} polls:`,
-              finalResult?.segments?.length ?? 0,
-              'segmentos'
-            )
             break
           }
-
           if (data.status === 'error') {
-            console.error('[TrackUpload] Job retornou erro:', data.error)
-            setJobStatus(`erro: ${data.error}`)
-            break
+            throw new Error(data.error || 'Erro no job')
           }
-
-          // ainda processando — segue o loop
         } catch (pollErr) {
-          console.warn('[TrackUpload] Erro no poll:', pollErr)
+          console.warn('[TrackUpload] Poll falhou:', pollErr)
         }
+      }
+
+      if (cancelRef.current) {
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'cancelled' } : q))
+        return
       }
 
       if (finalResult) {
-        setStructureOk(true)
-        setJobStatus('')
-        if (onAddAnalysis) {
-          onAddAnalysis(newTrack.id, finalResult, durationSec)
-        }
-      } else if (!jobStatus.startsWith('erro')) {
-        setJobStatus('timeout — não terminou a tempo')
+        if (onAddAnalysis) onAddAnalysis(newTrack.id, finalResult, durationSec)
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done' } : q))
+      } else {
+        setQueue(prev => prev.map(q => q.id === item.id
+          ? { ...q, status: 'error', error: 'Timeout na análise' }
+          : q
+        ))
       }
     } catch (err) {
-      console.error('[TrackUpload] Erro na análise estrutural:', err)
-      setJobStatus('erro na conexão')
-    } finally {
-      setAnalyzingStructure(false)
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido'
+      setQueue(prev => prev.map(q => q.id === item.id
+        ? { ...q, status: 'error', error: msg }
+        : q
+      ))
     }
   }
 
+  const handleFilesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    if (files.length === 0) return
+
+    const items: QueueItem[] = files.map(f => ({
+      id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file: f,
+      status: 'pending',
+    }))
+
+    setQueue(prev => [...prev, ...items])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleCancel = () => {
+    cancelRef.current = true
+    setQueue(prev => prev.map(q =>
+      q.status === 'pending' ? { ...q, status: 'cancelled' } : q
+    ))
+  }
+
+  const handleClearDone = () => {
+    setQueue(prev => prev.filter(q => q.status !== 'done' && q.status !== 'cancelled'))
+  }
+
+  const stats = {
+    total: queue.length,
+    done: queue.filter(q => q.status === 'done').length,
+    pending: queue.filter(q => q.status === 'pending').length,
+    processing: queue.filter(q => q.status === 'analyzing-bpm' || q.status === 'analyzing-structure').length,
+    errors: queue.filter(q => q.status === 'error').length,
+    cancelled: queue.filter(q => q.status === 'cancelled').length,
+  }
+
+  // 📣 Avisa o pai sempre que a fila mudar
+  useEffect(() => {
+    if (onQueueChange) {
+      onQueueChange({
+        total: stats.total,
+        done: stats.done,
+        pending: stats.pending,
+        processing: stats.processing,
+        errors: stats.errors,
+      })
+    }
+  }, [stats.total, stats.done, stats.pending, stats.processing, stats.errors, onQueueChange])
+
+  const hasActive = stats.processing > 0 || stats.pending > 0
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Área de upload */}
       <div
         onClick={() => fileInputRef.current?.click()}
         style={{
@@ -199,71 +267,111 @@ export default function TrackUpload({
           ref={fileInputRef}
           type="file"
           accept="audio/*"
-          onChange={handleFileChange}
+          multiple
+          onChange={handleFilesSelected}
           style={{ display: 'none' }}
         />
         <p style={{ fontSize: 14, color: 'var(--text)', marginBottom: 6 }}>
-          📁 clique para selecionar um arquivo de áudio
+          📁 clique para selecionar arquivos de áudio
         </p>
         <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
-          mp3, wav, ogg, flac — o BPM é detectado localmente no navegador
+          mp3, wav, ogg, flac — pode selecionar vários (fila serial)
         </p>
       </div>
 
-      {fileName && (
-        <div style={{ fontSize: 13, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
-          arquivo: <span style={{ color: 'var(--text)' }}>{fileName}</span>
-        </div>
-      )}
-
-      {analyzing && (
-        <p style={{ fontSize: 13, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
-          ⟳ analisando BPM...
-        </p>
-      )}
-
-      {bpm !== null && (
+      {/* Barra de progresso geral */}
+      {stats.total > 0 && (
         <div style={{
-          padding: '10px 14px',
+          padding: '12px 14px',
           background: 'var(--surface2)',
-          border: '1px solid var(--green)',
+          border: '1px solid var(--border)',
           borderRadius: 8,
-          fontSize: 13,
-          fontFamily: 'var(--font-mono, monospace)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
         }}>
-          ✓ BPM detectado: <strong style={{ color: 'var(--green)' }}>{bpm}</strong>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: 12,
+            fontFamily: 'var(--font-mono, monospace)',
+            color: 'var(--muted)',
+          }}>
+            <span>
+              fila: <strong style={{ color: 'var(--text)' }}>{stats.done}/{stats.total}</strong> concluídos
+              {stats.pending > 0 && ` · ${stats.pending} na espera`}
+              {stats.errors > 0 && ` · ${stats.errors} com erro`}
+              {stats.cancelled > 0 && ` · ${stats.cancelled} cancelados`}
+            </span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {hasActive && (
+                <button
+                  onClick={handleCancel}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--red)',
+                    color: 'var(--red)',
+                    borderRadius: 6,
+                    padding: '3px 10px',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕ cancelar
+                </button>
+              )}
+              {stats.done > 0 && (
+                <button
+                  onClick={handleClearDone}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    color: 'var(--muted)',
+                    borderRadius: 6,
+                    padding: '3px 10px',
+                    fontSize: 11,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  limpar concluídos
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{
+            height: 4,
+            background: 'var(--border)',
+            borderRadius: 2,
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              width: `${(stats.done / stats.total) * 100}%`,
+              height: '100%',
+              background: 'var(--green)',
+              transition: 'width 0.3s',
+            }} />
+          </div>
         </div>
       )}
 
-      {analyzingStructure && (
-        <p style={{ fontSize: 13, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
-          ⟳ analisando estrutura (intro/outro/drop)... {jobStatus && `[${jobStatus}]`}
-        </p>
-      )}
-
-      {structureOk && (
+      {/* Lista da fila */}
+      {queue.length > 0 && (
         <div style={{
-          padding: '10px 14px',
-          background: 'var(--surface2)',
-          border: '1px solid var(--green)',
-          borderRadius: 8,
-          fontSize: 13,
-          fontFamily: 'var(--font-mono, monospace)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          maxHeight: 240,
+          overflowY: 'auto',
         }}>
-          ✓ estrutura detectada
+          {queue.map(q => (
+            <QueueRow key={q.id} item={q} />
+          ))}
         </div>
       )}
 
-      {!analyzingStructure && jobStatus && !structureOk && (
-        <p style={{
-          fontSize: 12,
-          color: 'var(--red)',
-          fontFamily: 'var(--font-mono, monospace)',
-        }}>
-          ⚠ {jobStatus}
-        </p>
-      )}
-
+      {/* Compatibilidade */}
       {compatible.length > 0 && (
         <div style={{
           padding: '12px 14px',
@@ -290,6 +398,68 @@ export default function TrackUpload({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function QueueRow({ item }: { item: QueueItem }) {
+  const statusIcon = {
+    'pending': '○',
+    'analyzing-bpm': '⟳',
+    'analyzing-structure': '⟳',
+    'done': '✓',
+    'error': '✗',
+    'cancelled': '—',
+  }[item.status]
+
+  const statusColor = {
+    'pending': 'var(--muted)',
+    'analyzing-bpm': 'var(--accent)',
+    'analyzing-structure': 'var(--accent)',
+    'done': 'var(--green)',
+    'error': 'var(--red)',
+    'cancelled': 'var(--muted)',
+  }[item.status]
+
+  const statusText = {
+    'pending': 'na fila',
+    'analyzing-bpm': 'analisando BPM...',
+    'analyzing-structure': 'analisando estrutura...',
+    'done': 'concluído',
+    'error': item.error || 'erro',
+    'cancelled': 'cancelado',
+  }[item.status]
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '8px 12px',
+      background: 'var(--surface2)',
+      border: `1px solid ${item.status === 'error' ? 'var(--red)' : item.status === 'done' ? 'var(--green)' : 'var(--border)'}`,
+      borderRadius: 8,
+      fontSize: 12,
+      fontFamily: 'var(--font-mono, monospace)',
+    }}>
+      <span style={{ color: statusColor, width: 14, textAlign: 'center' }}>{statusIcon}</span>
+      <span style={{
+        flex: 1,
+        color: 'var(--text)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}>
+        {item.file.name}
+      </span>
+      {item.bpm !== undefined && (
+        <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+          {item.bpm} BPM
+        </span>
+      )}
+      <span style={{ color: statusColor, fontSize: 11 }}>
+        {statusText}
+      </span>
     </div>
   )
 }
