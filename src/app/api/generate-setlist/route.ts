@@ -5,13 +5,11 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { Track, SetConfig } from '@/lib/types'
 
-// Cliente OpenRouter (compatível com OpenAI SDK)
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 
-// ⏱ Timeout de segurança
 const TIMEOUT_MS = 90_000
 
 interface GenerateRequest {
@@ -21,6 +19,53 @@ interface GenerateRequest {
 
 function normalizeTitle(s: string): string {
   return (s || '').toLowerCase().trim().replace(/\s+/g, ' ')
+}
+
+function findOriginalTrack(setlistTrack: any, tracks: Track[]): Track | undefined {
+  const aiTitle = normalizeTitle(setlistTrack.title)
+  const aiBpm = Number(setlistTrack.bpm)
+
+  // 1. Match exato + BPM próximo (±2)
+  let original = tracks.find(
+    (t) =>
+      normalizeTitle(t.title) === aiTitle &&
+      Math.abs((t.bpm || 0) - aiBpm) <= 2
+  )
+  if (original) return original
+
+  // 2. Match exato de título (ignora BPM)
+  original = tracks.find((t) => normalizeTitle(t.title) === aiTitle)
+  if (original) return original
+
+  // 3. Remove sufixos comuns: "_pn", "-pn", " (Original Mix)", "(Remix)", "[...]"
+  const cleanTitle = (s: string) =>
+    normalizeTitle(s)
+      .replace(/[_\-]pn$/i, '')
+      .replace(/\s*\(original mix\)\s*/gi, '')
+      .replace(/\s*\(remix\)\s*/gi, '')
+      .replace(/\s*\[.*?\]\s*/g, '')
+      .trim()
+
+  const aiClean = cleanTitle(aiTitle)
+  original = tracks.find((t) => cleanTitle(t.title) === aiClean)
+  if (original) return original
+
+  // 4. Match por includes
+  original = tracks.find((t) => {
+    const tClean = cleanTitle(t.title)
+    return tClean.includes(aiClean) || aiClean.includes(tClean)
+  })
+  if (original) return original
+
+  // 5. BPM + energia (último recurso)
+  original = tracks.find(
+    (t) =>
+      Math.abs((t.bpm || 0) - aiBpm) <= 1 &&
+      t.energy === setlistTrack.energy
+  )
+  if (original) return original
+
+  return undefined
 }
 
 export async function POST(req: NextRequest) {
@@ -39,43 +84,48 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 🔹 Prompt — obriga usar TODAS as faixas
+    // 🎯 A2: Ordem pré-calculada pelo algoritmo local
+    const orderedList = tracks
+      .map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || '?'}, Tom: ${t.key || '?'}, Energia: ${t.energy}/10)`)
+      .join('\n')
+
     const systemPrompt = `Você é um DJ profissional e curador musical com décadas de experiência.
-Sua tarefa é criar um setlist harmônico e tecnicamente viável.
+Sua tarefa é CRIAR UMA ANÁLISE e NOTAS DE TRANSIÇÃO para um setlist
+que JÁ FOI PRÉ-ORDENADO por um algoritmo de compatibilidade harmônica.
 
-Regras que você DEVE seguir:
+⚠️ REGRA CRÍTICA — NÃO IGNORE:
+A ordem das faixas abaixo FOI CALCULADA por um algoritmo que analisou
+BPM + Camelot + estrutura de cada faixa. Esta ordem é o ponto de partida
+e você DEVE RESPEITÁ-LA.
 
-1. USE TODAS as ${tracks.length} faixas fornecidas. NÃO descarte nenhuma.
-   Se alguma faixa não encaixar harmonicamente, coloque-a na posição que
-   minimize o dano (ex: no final do set, ou entre duas faixas compatíveis).
+Se você identificar uma ordem MELHOR, você PODE reordenar — MAS APENAS se:
+- A mudança melhorar o score médio de compatibilidade
+- Você EXPLICAR na "analysis" por que a ordem original não era ideal
 
-2. BPM: A diferença entre faixas consecutivas deve ser de no máximo ±3 BPM
-   (ideal) ou ±6 BPM (aceitável). Saltos maiores são permitidos apenas se
-   forem inevitáveis (ex: a faixa mais distante foi colocada no final).
+NÃO reordene por preferência subjetiva. NÃO invente ordem aleatória.
+NÃO descarte faixas.
 
-3. Tom (Camelot): Priorize transições entre:
-   - Mesmo código Camelot (ex: 8A → 8A) — match perfeito
-   - Números adjacentes, mesma letra (ex: 8A → 9A ou 7A) — muito suave
-   - Mesmo número, letra diferente (ex: 8A → 8B) — muda o humor
-
-4. Curva de energia: Respeite a curva solicitada no contexto.
-
-IMPORTANTE: NÃO invente faixas. Use APENAS as faixas fornecidas na lista.
-Copie o "title" EXATAMENTE como está na lista.
+Regras técnicas que você DEVE respeitar:
+- BPM: diferença entre faixas consecutivas ≤ ±3 BPM (ideal) ou ±6 (aceitável)
+- Tom (Camelot): priorize mesmo código, adjacentes mesma letra, ou mesmo número
+- Energia: respeite a curva solicitada
 
 Retorne APENAS um JSON válido no formato:
 {
   "setlist": [
     {
       "position": 1,
-      "title": "Nome da música",
+      "title": "Nome EXATO da música (copie da lista)",
       "artist": "Artista",
       "bpm": 128,
       "key": "8A",
       "energy": 7,
-      "transitionNote": "Nota sobre a transição para a próxima faixa"
+      "transitionNote": "Nota prática sobre como mixar para a próxima faixa (ex: 'solte no breakdown, crossfade de 16 barras, corta o kick aos 4:30')"
     }
-  ]
+  ],
+  "analysis": "Análise geral do setlist em 2-3 frases, explicando as escolhas harmônicas e se você manteve ou alterou a ordem pré-calculada (e por quê)",
+  "djTip": "Dica prática de DJ: efeito, EQ, técnica de mixagem para este set específico",
+  "peakMoment": "Descrição do momento de pico do set (qual faixa, qual minuto aproximado)"
 }`
 
     const userPrompt = `Contexto do set:
@@ -84,11 +134,19 @@ Retorne APENAS um JSON válido no formato:
 - Curva de energia: ${config.energyCurve}
 - Público: ${config.audience || 'Não especificado'}
 
-Faixas disponíveis na biblioteca do DJ (${tracks.length} faixas — use TODAS):
-${tracks.map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || '?'}, Tom: ${t.key || '?'}, Energia: ${t.energy}/10)`).join('\n')}
+⚠️ ORDEM PRÉ-CALCULADA PELO ALGORITMO (mantenha esta ordem, salvo se tiver motivo forte):
 
-Monte o melhor setlist possível usando TODAS as faixas, respeitando as regras
-de compatibilidade harmônica (BPM e Camelot).`
+${orderedList}
+
+Total: ${tracks.length} faixas.
+
+Sua tarefa:
+1. Confirme a ordem acima (ou justifique uma alteração se necessário)
+2. Para cada transição, escreva uma "transitionNote" prática de DJ
+3. Escreva a "analysis" geral (mencionando se manteve a ordem)
+4. Escreva o "djTip" e o "peakMoment"
+
+Retorne APENAS o JSON no formato especificado.`
 
     const MODEL = 'cohere/north-mini-code:free'
 
@@ -107,7 +165,7 @@ de compatibilidade harmônica (BPM e Camelot).`
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          temperature: 0.7,
+          temperature: 0.5,
           max_tokens: 8192,
           response_format: { type: 'json_object' },
         },
@@ -171,29 +229,10 @@ de compatibilidade harmônica (BPM e Camelot).`
       }
     }
 
-    // 🔑 REINJETA O ID DAS FAIXAS ORIGINAIS
+    // 🔑 REINJEÇÃO DE IDs
     if (Array.isArray(parsed.setlist)) {
       const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
-        const normTitle = normalizeTitle(setlistTrack.title)
-        const setlistBpm = Number(setlistTrack.bpm)
-
-        let original = tracks.find(
-          (t) =>
-            normalizeTitle(t.title) === normTitle &&
-            Math.abs((t.bpm || 0) - setlistBpm) <= 1
-        )
-
-        if (!original) {
-          original = tracks.find((t) => normalizeTitle(t.title) === normTitle)
-        }
-
-        if (!original) {
-          original = tracks.find(
-            (t) =>
-              normalizeTitle(t.title).includes(normTitle) ||
-              normTitle.includes(normalizeTitle(t.title))
-          )
-        }
+        const original = findOriginalTrack(setlistTrack, tracks)
 
         if (original) {
           console.log(`[SetForge] Match OK: "${setlistTrack.title}" → id=${original.id}`)
@@ -211,7 +250,7 @@ de compatibilidade harmônica (BPM e Camelot).`
       parsed.setlist = tracksWithIds
     }
 
-    // ⚠️ Aviso se o OpenRouter descartou faixas
+    // ⚠️ Aviso se descartou faixas
     if (parsed.setlist.length < tracks.length) {
       console.warn(
         `[SetForge] OpenRouter usou ${parsed.setlist.length} de ${tracks.length} faixas ` +
@@ -226,9 +265,9 @@ de compatibilidade harmônica (BPM e Camelot).`
         duration: config.duration,
         energyCurve: config.energyCurve,
         audience: config.audience,
-        analysis: null,
-        djTip: null,
-        peakMoment: null,
+        analysis: parsed.analysis || null,
+        djTip: parsed.djTip || null,
+        peakMoment: parsed.peakMoment || null,
         totalDuration: parsed.setlist?.length?.toString() || '0',
         userId: session.user.id,
         tracks: {
@@ -247,6 +286,10 @@ de compatibilidade harmônica (BPM e Camelot).`
 
     return NextResponse.json({
       setlist: parsed.setlist,
+      analysis: parsed.analysis || '',
+      djTip: parsed.djTip || '',
+      peakMoment: parsed.peakMoment || '',
+      totalDuration: parsed.setlist?.length?.toString() || '0',
       id: setlist.id,
     })
   } catch (error) {

@@ -9,6 +9,7 @@ import {
   formatSeconds,
   calculateMixTimeline,
 } from '@/lib/mix-timeline'
+import CompatibilityMatrix from './CompatibilityMatrix'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -29,7 +30,7 @@ export default function SetlistView({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* 🔝 ALERTA DE COMPATIBILIDADE (no topo) */}
+      {/* 🔝 ALERTA DE COMPATIBILIDADE */}
       {analyses && durations && (
         <CompatibilityAlert
           setlist={setlist}
@@ -38,7 +39,39 @@ export default function SetlistView({
         />
       )}
 
-      {/* Sequência de faixas */}
+      {/* 📊 ANÁLISE GERAL DO SET */}
+      {setlist.analysis && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: 'var(--green)',
+              boxShadow: '0 0 8px var(--green)',
+            }} />
+            <p style={{
+              fontSize: 11,
+              color: 'var(--muted)',
+              fontFamily: 'var(--font-mono, monospace)',
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}>
+              análise do set
+            </p>
+          </div>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
+            {setlist.analysis}
+          </p>
+        </div>
+      )}
+
+      {/* 🎵 MATRIZ DE COMPATIBILIDADE */}
+      {analyses && durations && setlist.setlist.length >= 2 && (
+        <CompatibilityMatrix tracks={setlist.setlist} />
+      )}
+
+      {/* SEQUÊNCIA DE FAIXAS */}
       <div>
         <p style={{
           fontSize: 11,
@@ -57,7 +90,7 @@ export default function SetlistView({
             const nextTrack = !isLast ? setlist.setlist[i + 1] : null
 
             return (
-              <div key={i}>
+              <div key={track.id || i}>
                 <TrackRow track={track} index={i} />
 
                 {nextTrack && (
@@ -92,7 +125,67 @@ export default function SetlistView({
         </div>
       </div>
 
-      {/* Regenerar */}
+      {/* 💡 DJ TIP */}
+      {setlist.djTip && (
+        <div style={{
+          padding: '16px 18px',
+          background: 'var(--surface2)',
+          border: '1px solid var(--border)',
+          borderRadius: 12,
+          display: 'flex',
+          gap: 12,
+          alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>💡</span>
+          <div>
+            <p style={{
+              fontSize: 11,
+              color: 'var(--muted)',
+              fontFamily: 'var(--font-mono, monospace)',
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+              marginBottom: 6,
+            }}>
+              dica de DJ
+            </p>
+            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
+              {setlist.djTip}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 🔥 PEAK MOMENT */}
+      {setlist.peakMoment && (
+        <div style={{
+          padding: '16px 18px',
+          background: 'linear-gradient(135deg, rgba(252, 92, 92, 0.1), rgba(196, 92, 252, 0.1))',
+          border: '1px solid rgba(252, 92, 92, 0.3)',
+          borderRadius: 12,
+          display: 'flex',
+          gap: 12,
+          alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>🔥</span>
+          <div>
+            <p style={{
+              fontSize: 11,
+              color: 'var(--red)',
+              fontFamily: 'var(--font-mono, monospace)',
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+              marginBottom: 6,
+            }}>
+              momento de pico
+            </p>
+            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
+              {setlist.peakMoment}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 🔄 REGENERAR */}
       {onRegenerate && (
         <button
           onClick={onRegenerate}
@@ -504,26 +597,36 @@ function TransitionRow({
 
               <TimelineVisual timeline={timeline} />
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+              {/* 🎯 INSTRUÇÕES PARA O DJ — 4 passos */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
+                {/* 1. Play na próxima faixa */}
                 <Instruction
                   icon="▶"
                   color="var(--accent)"
-                  label="Solte a próxima faixa"
-                  value={timeline.playAtFormatted}
-                  hint={`aos ${timeline.playAtFormatted} de "${from.title}"`}
+                  label="Dê play na próxima faixa"
+                  value={`aos ${timeline.playBAtFormatted} da "${to.title}"`}
+                  hint={
+                    timeline.introEndBSec > 0
+                      ? `o beat principal entra em ${timeline.introEndBFormatted}, alinhado com o crossfade`
+                      : 'a faixa começa direto com o beat (sem intro)'
+                  }
                 />
+
+                {/* 2. Crossfade */}
                 <Instruction
                   icon="⟷"
                   color="var(--green)"
-                  label="Crossfade"
-                  value={`${timeline.crossfadeStartFormatted} → ${timeline.crossfadeEndFormatted}`}
+                  label="Inicie o crossfade"
+                  value={`aos ${timeline.crossfadeStartFormatted} de "${from.title}"`}
                   hint={`${timeline.crossfadeBars} barras (${formatSeconds(timeline.crossfadeDurationSec)})`}
                 />
+
+                {/* 3. Stop */}
                 <Instruction
                   icon="■"
                   color="var(--red)"
                   label="Desligue a faixa anterior"
-                  value={timeline.stopAFormatted}
+                  value={`aos ${timeline.stopAFormatted}`}
                   hint={`aos ${timeline.stopAFormatted} de "${from.title}"`}
                 />
               </div>
@@ -768,7 +871,6 @@ function analyzeTransitions(
     const bpmForA = bpmA > 0 ? bpmA : bpmB
     const bpmForB = bpmB > 0 ? bpmB : bpmA
 
-    // 1. BPM
     if (bpmA > 0 && bpmB > 0) {
       const bpmDiff = Math.abs(bpmA - bpmB)
       if (bpmDiff > 10) {
@@ -780,7 +882,6 @@ function analyzeTransitions(
       }
     }
 
-    // 2. Camelot
     const camelot = camelotCompatibility(a.key || '', b.key || '')
     if (camelot === 'bad') {
       worstSeverity = 'critical'
@@ -790,24 +891,20 @@ function analyzeTransitions(
       reasons.push(`Camelot ${a.key} → ${b.key} (muda o humor)`)
     }
 
-   // 3. Estrutura — intro curto da faixa B
-const analysisB = analyses[b.id]
-if (analysisB?.segments && bpmForB > 0) {
-  const introSegs = analysisB.segments.filter(s => s.label.toLowerCase() === 'intro')
-  // Só alerta se o intro EXISTE e é curto.
-  // Se não tem intro, não alerta (comportamento normal em EDM).
-  if (introSegs.length > 0) {
-    const totalIntroSec = introSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
-    const barDuration = (60 / bpmForB) * 4
-    const introBars = totalIntroSec / barDuration
-    if (introBars < 4) {
-      if (worstSeverity !== 'critical') worstSeverity = 'warning'
-      reasons.push(`intro da faixa B é muito curto (~${Math.round(introBars)} barras)`)
+    const analysisB = analyses[b.id]
+    if (analysisB?.segments && bpmForB > 0) {
+      const introSegs = analysisB.segments.filter(s => s.label.toLowerCase() === 'intro')
+      if (introSegs.length > 0) {
+        const totalIntroSec = introSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
+        const barDuration = (60 / bpmForB) * 4
+        const introBars = totalIntroSec / barDuration
+        if (introBars < 4) {
+          if (worstSeverity !== 'critical') worstSeverity = 'warning'
+          reasons.push(`intro da faixa B é muito curto (~${Math.round(introBars)} barras)`)
+        }
+      }
     }
-  }
-}
 
-    // 4. Estrutura — outro da faixa A (com fallback inteligente)
     const analysisA = analyses[a.id]
     const durA = durations[a.id] || 0
     if (analysisA?.segments && durA > 0 && bpmForA > 0) {
@@ -821,7 +918,6 @@ if (analysisB?.segments && bpmForB > 0) {
           reasons.push(`outro da faixa A é muito curto (~${Math.round(outroBars)} barras)`)
         }
       } else {
-        // Sem "outro" explícito — só alerta se NÃO houver fallback válido
         const hasFallback = analysisA.segments.some(s => {
           const label = s.label.toLowerCase()
           return ['outro', 'breakdown', 'drop', 'chorus', 'verse'].includes(label)
@@ -830,7 +926,6 @@ if (analysisB?.segments && bpmForB > 0) {
           if (worstSeverity !== 'critical') worstSeverity = 'warning'
           reasons.push('faixa A sem ponto de saída claro (sem outro/breakdown/drop/chorus)')
         }
-        // Se tiver fallback, o calculateMixTimeline resolve — não alerta
       }
     }
 

@@ -15,6 +15,41 @@ model User {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   setlists  Setlist[]
+  tracks    Track[]
+  folders   Folder[]
+}
+
+model Folder {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks    Track[]
+
+  @@index([userId])
+}
+
+model Track {
+  id           String   @id @default(cuid())
+  userId       String
+  folderId     String?
+  title        String
+  artist       String   @default("")
+  bpm          Int      @default(0)
+  key          String   @default("")
+  energy       Int      @default(7)
+  durationSec  Float    @default(0)
+  segments     Json?
+  fileHash     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder       Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([folderId])
 }
 
 model Setlist {

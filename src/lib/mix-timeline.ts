@@ -19,11 +19,17 @@ export interface AudioAnalysis {
  * Resultado do cálculo de mixagem entre duas faixas.
  */
 export interface MixTimeline {
-  // Instruções em segundos
-  playAtSec: number          // quando soltar a faixa B (em segundos da faixa A)
+  // Instruções em segundos (timeline da Faixa A)
+  playAtSec: number          // quando o DJ dá play na Faixa A (0 = início)
   crossfadeStartSec: number  // quando começar o crossfade
   crossfadeEndSec: number    // quando terminar o crossfade
   stopASec: number           // quando desligar a faixa A
+
+  // 🆕 Instruções sobre a Faixa B (em segundos da Faixa B)
+  playBAtSec: number         // em qual segundo da Faixa B dar play (normalmente 0)
+  playBAtFormatted: string   // "0:00" ou "0:30" (se pular intro)
+  introEndBSec: number       // quando o beat principal da Faixa B entra
+  introEndBFormatted: string // "0:30"
 
   // Instruções formatadas (M:SS) — o que o DJ vê
   playAtFormatted: string
@@ -33,9 +39,9 @@ export interface MixTimeline {
 
   // Metadados
   crossfadeDurationSec: number
-  crossfadeBars: number       // quantas barras tem o crossfade
-  confidence: 'high' | 'medium' | 'low'  // quão confiante é o cálculo
-  notes: string[]             // observações para o DJ
+  crossfadeBars: number
+  confidence: 'high' | 'medium' | 'low'
+  notes: string[]
 }
 
 /**
@@ -50,31 +56,23 @@ export function formatSeconds(sec: number): string {
 
 /**
  * Calcula quantos segundos vale uma barra no BPM dado.
- * Uma barra tem 4 beats (compasso 4/4, o padrão da música eletrônica).
  */
 export function secondsPerBar(bpm: number): number {
-  if (bpm <= 0) return 2 // fallback: assume 120 BPM (0.5s por beat)
+  if (bpm <= 0) return 2
   return (60 / bpm) * 4
 }
 
 /**
  * Encontra o "intro end" — o momento em que o beat está estabelecido
  * e o DJ pode soltar a faixa B.
- *
- * Estratégia:
- * - Se houver múltiplos segmentos "intro", pega o FIM do último.
- * - Se não houver "intro", pega o fim do primeiro "verse" ou "chorus".
- * - Se não houver nenhum, retorna 0 (início da faixa).
  */
 export function findIntroEnd(segments: AudioSegment[]): { time: number; confidence: 'high' | 'medium' | 'low' } {
   const intros = segments.filter(s => s.label === 'intro')
   if (intros.length > 0) {
-    // Último intro (a faixa pode ter 2 intros — bateria + melodia)
     const lastIntro = intros[intros.length - 1]
     return { time: lastIntro.end, confidence: 'high' }
   }
 
-  // Fallback: fim do primeiro verse/chorus
   const firstVerse = segments.find(s => s.label === 'verse' || s.label === 'chorus')
   if (firstVerse) {
     return { time: firstVerse.end, confidence: 'medium' }
@@ -86,49 +84,37 @@ export function findIntroEnd(segments: AudioSegment[]): { time: number; confiden
 /**
  * Encontra o "outro start" — o momento em que o DJ deve começar a mixagem
  * para sair da faixa A.
- *
- * Estratégia (em ordem de preferência):
- * 1. Se houver "outro", usar o START dele.
- * 2. Se não houver, usar o START do último "breakdown".
- * 3. Se não houver, usar o START do último "drop" ou "chorus".
- * 4. Se não houver nada, usar o fim do último "verse".
  */
 export function findOutroStart(
   segments: AudioSegment[],
   trackDurationSec: number
 ): { time: number; confidence: 'high' | 'medium' | 'low' } {
-  // 1. Outro explícito
   const outro = segments.find(s => s.label === 'outro')
   if (outro) {
     return { time: outro.start, confidence: 'high' }
   }
 
-  // 2. Último breakdown (o DJ sai antes do breakdown, não depois)
   const breakdowns = segments.filter(s => s.label === 'breakdown')
   if (breakdowns.length > 0) {
     const lastBreakdown = breakdowns[breakdowns.length - 1]
     return { time: lastBreakdown.start, confidence: 'high' }
   }
 
-  // 3. Último drop ou chorus
   const lastDrop = [...segments].reverse().find(s => s.label === 'drop' || s.label === 'chorus')
   if (lastDrop) {
     return { time: lastDrop.start, confidence: 'medium' }
   }
 
-  // 4. Fim do último verse
   const lastVerse = [...segments].reverse().find(s => s.label === 'verse')
   if (lastVerse) {
     return { time: lastVerse.start, confidence: 'low' }
   }
 
-  // 5. Fallback: 70% da duração total
   return { time: trackDurationSec * 0.7, confidence: 'low' }
 }
 
 /**
  * Arredonda um tempo para o múltiplo de barra mais próximo.
- * Isso garante que o mix-in/out caia em phrase boundaries (16/32 barras).
  */
 export function roundToNearestBar(
   timeSec: number,
@@ -144,11 +130,9 @@ export function roundToNearestBar(
 /**
  * Calcula a timeline de mixagem entre duas faixas.
  *
- * @param trackA Faixa que está tocando (a que vai sair)
- * @param trackB Faixa que vai entrar
- * @param analysisA Análise estrutural da faixa A
- * @param analysisB Análise estrutural da faixa B
- * @param durationA Duração total da faixa A em segundos (se conhecida)
+ * 🎯 NOVO: calcula também o `playBAtSec` — em qual segundo da Faixa B
+ * o DJ deve dar play, para que o beat principal da B entre alinhado
+ * com o início do crossfade na Faixa A.
  */
 export function calculateMixTimeline(
   trackA: Track,
@@ -159,22 +143,21 @@ export function calculateMixTimeline(
 ): MixTimeline {
   const notes: string[] = []
 
-  // 1. Encontra o ponto de saída na faixa A
+  // 1. Ponto de saída na faixa A
   const outro = findOutroStart(analysisA.segments, durationA)
 
-  // 2. Encontra o ponto de entrada na faixa B
-  const intro = findIntroEnd(analysisB.segments)
+  // 2. 🆕 Ponto de entrada na faixa B (quando o beat principal entra)
+  const introB = findIntroEnd(analysisB.segments)
 
-  // 3. Usa o BPM da faixa A (assumindo transição suave) para calcular barras
+  // 3. BPM para cálculo de barras
   const bpm = analysisA.bpm || trackA.bpm || 120
   const barDuration = secondsPerBar(bpm)
 
-  // 4. Duração do crossfade = min(outro restante de A, intro de B)
-  //    Restrição prática: 16 ou 32 barras (evita crossfades muito curtos/longos)
+  // 4. Duração do crossfade
   const remainingA = durationA - outro.time
-  const introBDuration = intro.time
+  const introBDuration = introB.time
 
-  let crossfadeBars = 16 // padrão
+  let crossfadeBars = 16
   if (introBDuration < barDuration * 16 && introBDuration >= barDuration * 8) {
     crossfadeBars = 8
     notes.push('Intro da faixa B é curto — crossfade reduzido para 8 barras')
@@ -189,37 +172,60 @@ export function calculateMixTimeline(
   const crossfadeDuration = barDuration * crossfadeBars
 
   // 5. Crossfade termina quando a faixa A for desligada
-  //    = mix-out point (alinhado ao phrase boundary mais próximo)
   const crossfadeEnd = roundToNearestBar(outro.time, bpm, 16)
 
   // 6. Crossfade começa = fim - duração
   const crossfadeStart = Math.max(0, crossfadeEnd - crossfadeDuration)
 
-  // 7. DJ solta a faixa B no início do crossfade
-  const playAt = crossfadeStart
+  // 7. 🆕 playBAt: quando dar play na Faixa B
+  //
+  // Queremos que o BEAT PRINCIPAL da Faixa B (introEndB) caia exatamente
+  // no crossfadeStart. Então:
+  //
+  //   playBAt = crossfadeStart - introEndB
+  //
+  // Se introEndB for 0 (faixa começa direto com o beat), playBAt = crossfadeStart.
+  // Se playBAt for negativo, significa que a Faixa B não tem intro suficiente
+  // para cobrir o crossfade — aí damos play em 0 e a faixa B entra "no meio".
+  //
+  const playBAtRaw = crossfadeStart - introB.time
+  const playBAtSec = Math.max(0, playBAtRaw)
 
-  // 8. Confiança geral = a pior das duas detecções
+  if (playBAtRaw < 0 && introB.time > 0) {
+    notes.push(
+      `Intro da faixa B (${formatSeconds(introB.time)}) é maior que o espaço antes do crossfade — ` +
+      `a faixa B vai entrar no meio do intro`
+    )
+  }
+
+  // 8. Confiança geral
   const confidence: 'high' | 'medium' | 'low' =
-    outro.confidence === 'low' || intro.confidence === 'low'
+    outro.confidence === 'low' || introB.confidence === 'low'
       ? 'low'
-      : outro.confidence === 'medium' || intro.confidence === 'medium'
+      : outro.confidence === 'medium' || introB.confidence === 'medium'
         ? 'medium'
         : 'high'
 
   if (outro.confidence === 'low') {
     notes.push('Estrutura da faixa A pouco clara — verifique o ponto de saída')
   }
-  if (intro.confidence === 'low') {
+  if (introB.confidence === 'low') {
     notes.push('Estrutura da faixa B pouco clara — verifique o ponto de entrada')
   }
 
   return {
-    playAtSec: playAt,
+    playAtSec: crossfadeStart,
     crossfadeStartSec: crossfadeStart,
     crossfadeEndSec: crossfadeEnd,
     stopASec: crossfadeEnd,
 
-    playAtFormatted: formatSeconds(playAt),
+    // 🆕 Campos da Faixa B
+    playBAtSec,
+    playBAtFormatted: formatSeconds(playBAtSec),
+    introEndBSec: introB.time,
+    introEndBFormatted: formatSeconds(introB.time),
+
+    playAtFormatted: formatSeconds(crossfadeStart),
     crossfadeStartFormatted: formatSeconds(crossfadeStart),
     crossfadeEndFormatted: formatSeconds(crossfadeEnd),
     stopAFormatted: formatSeconds(crossfadeEnd),
@@ -232,8 +238,7 @@ export function calculateMixTimeline(
 }
 
 /**
- * Gera a timeline para uma sequência inteira de faixas (o setlist completo).
- * Retorna uma lista de "transições" — uma para cada par consecutivo.
+ * Gera a timeline para uma sequência inteira de faixas.
  */
 export function calculateFullTimeline(
   setlist: Array<{ track: Track; analysis: AudioAnalysis; duration: number }>

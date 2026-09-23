@@ -4,7 +4,7 @@ import { useSession } from 'next-auth/react'
 import TrackUpload from '@/components/TrackUpload'
 import { Track, SetConfig, GeneratedSetlist } from '@/lib/types'
 import SetlistView from '@/components/SetlistView'
-import { findCompatibleTracks } from '@/lib/harmonic-utils'
+import { computeOptimalOrder, scoreOrder } from '@/lib/optimal-order'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 
 interface QueueStats {
@@ -15,7 +15,6 @@ interface QueueStats {
   errors: number
 }
 
-// Config padrão (o painel de config foi removido — esses valores são fixos)
 const DEFAULT_CONFIG: SetConfig = {
   eventType: 'Balada eletrônica',
   duration: '2 horas',
@@ -30,25 +29,91 @@ export default function Home() {
   const [setlist, setSetlist] = useState<GeneratedSetlist | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // Análise estrutural por trackId + duração
   const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
   const [durations, setDurations] = useState<Record<string, number>>({})
 
-  // Estado da fila de upload (refletido no badge do painel)
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
 
-  // 🔒 Se não estiver logado, redireciona
   useEffect(() => {
     if (status === 'unauthenticated') {
       window.location.href = '/login'
     }
   }, [status])
 
-  const addTrack = (track: Track) => {
+  useEffect(() => {
+    if (status !== 'authenticated') return
+
+    const loadTracks = async () => {
+      try {
+        const res = await fetch('/api/tracks')
+        if (!res.ok) {
+          console.warn('[page] Falha ao carregar faixas:', res.status)
+          return
+        }
+
+        const data = await res.json()
+        const dbTracks: any[] = data.tracks ?? []
+
+        const mappedTracks: Track[] = dbTracks.map(t => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          bpm: t.bpm,
+          key: t.key,
+          energy: t.energy,
+          source: 'upload',
+        }))
+
+        const newAnalyses: Record<string, AudioAnalysis> = {}
+        const newDurations: Record<string, number> = {}
+
+        dbTracks.forEach(t => {
+          if (t.segments) {
+            newAnalyses[t.id] = t.segments as AudioAnalysis
+          }
+          if (t.durationSec && t.durationSec > 0) {
+            newDurations[t.id] = t.durationSec
+          }
+        })
+
+        setTracks(mappedTracks)
+        setAnalyses(newAnalyses)
+        setDurations(newDurations)
+
+        console.log(`[page] Carregadas ${mappedTracks.length} faixas do banco`)
+      } catch (err) {
+        console.error('[page] Erro ao carregar faixas:', err)
+      }
+    }
+
+    loadTracks()
+  }, [status])
+
+  // ➕ Adiciona faixa (local + banco)
+  const addTrack = (track: Track, durationSec?: number) => {
     setTracks(prev => prev.find(t => t.id === track.id) ? prev : [...prev, track])
+
+    fetch('/api/tracks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: track.id,
+        title: track.title,
+        artist: track.artist || '',
+        bpm: track.bpm || 0,
+        key: track.key || '',
+        energy: track.energy || 7,
+        durationSec: durationSec ?? 0,
+      }),
+    })
+      .then(res => {
+        if (!res.ok) console.warn('[page] Falha ao salvar faixa:', res.status)
+        else console.log('[page] Faixa salva no banco:', track.title)
+      })
+      .catch(err => console.warn('[page] Erro ao salvar faixa:', err))
   }
 
-  // Remove a faixa E a análise associada (evita lixo em memória)
+  // ➖ Remove faixa (local + banco)
   const removeTrack = (id: string) => {
     setTracks(prev => prev.filter(t => t.id !== id))
     setAnalyses(prev => {
@@ -61,17 +126,26 @@ export default function Home() {
       delete next[id]
       return next
     })
+
+    fetch(`/api/tracks?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
   }
 
-  // Limpa tudo: faixas + análises + durações
+  // 🧹 Limpa biblioteca (local + banco)
   const clearLibrary = () => {
+    const ids = tracks.map(t => t.id)
     setTracks([])
     setAnalyses({})
     setDurations({})
     setSetlist(null)
+
+    ids.forEach(id => {
+      fetch(`/api/tracks?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+        .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
+    })
   }
 
-  // Recebe a análise estrutural do TrackUpload
+  // 🎼 Recebe análise estrutural (local + banco)
   const handleAddAnalysis = (
     trackId: string,
     analysis: AudioAnalysis & { key?: string; bpm?: number },
@@ -80,7 +154,6 @@ export default function Home() {
     setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
     setDurations(prev => ({ ...prev, [trackId]: durationSec }))
 
-    // 🔑 Atualiza key E bpm da faixa com o que veio da análise
     setTracks(prev => prev.map(t => {
       if (t.id !== trackId) return t
       return {
@@ -89,6 +162,23 @@ export default function Home() {
         bpm: analysis.bpm && analysis.bpm > 0 ? analysis.bpm : t.bpm,
       }
     }))
+
+    fetch('/api/tracks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: trackId,
+        key: analysis.key || '',
+        bpm: analysis.bpm ?? 0,
+        durationSec: durationSec,
+        segments: analysis,
+      }),
+    })
+      .then(res => {
+        if (!res.ok) console.warn('[page] Falha ao salvar análise:', res.status)
+        else console.log('[page] Análise salva no banco:', trackId)
+      })
+      .catch(err => console.warn('[page] Erro ao salvar análise:', err))
   }
 
   const generate = async () => {
@@ -96,11 +186,15 @@ export default function Home() {
     setLoading(true)
     setSetlist(null)
     try {
-      const anchor = tracks[0]
-      const compatible = findCompatibleTracks(anchor, tracks, 60)
-      const tracksForAI = compatible.length > 0
-        ? [anchor, ...compatible.slice(0, 20).map(c => c.track)]
-        : tracks
+      // 🎯 A1: Calcula a ordem ótima LOCAL antes de enviar pra IA
+      const optimalOrder = computeOptimalOrder(tracks)
+      const optimalScore = scoreOrder(optimalOrder)
+
+      console.log(`[page] Ordem ótima local: score médio ${optimalScore}%`)
+      console.log(`[page] Ordem sugerida:`, optimalOrder.map(t => t.title).join(' → '))
+
+      // Envia a ordem ótima pra IA (ela pode refinar, mas já parte do melhor)
+      const tracksForAI = optimalOrder
 
       const res = await fetch('/api/generate-setlist', {
         method: 'POST',
@@ -129,7 +223,6 @@ export default function Home() {
     }
   }
 
-  // Badge do painel "biblioteca" — mostra faixas + progresso da fila
   const libraryBadge = (() => {
     const base = `${tracks.length} faixa${tracks.length !== 1 ? 's' : ''}`
     if (queueStats && (queueStats.processing > 0 || queueStats.pending > 0)) {
@@ -162,7 +255,6 @@ export default function Home() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', paddingBottom: 80 }}>
-      {/* Header */}
       <header style={{ padding: '24px 28px', borderBottom: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: 14 }}>
         <div style={{ width: 38, height: 38, background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, color: '#fff', fontSize: 16, boxShadow: '0 0 20px rgba(124,92,252,0.3)' }}>SF</div>
         <div>
@@ -173,11 +265,7 @@ export default function Home() {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
-              <span style={{
-                fontSize: 12,
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono, monospace)',
-              }}>
+              <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
                 ● logado
               </span>
               <button
@@ -223,7 +311,6 @@ export default function Home() {
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 20px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-        {/* Library */}
         <Panel title="biblioteca de músicas" badge={libraryBadge}>
           <TrackUpload
             onAddTrack={addTrack}
@@ -243,14 +330,12 @@ export default function Home() {
             </div>
           )}
 
-          {/* Tracks list */}
           {tracks.length > 0 && (
             <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
               <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>faixas na biblioteca</p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {tracks.map(t => (
                   <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
-                    {t.artworkUrl && <img src={t.artworkUrl} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover' }} />}
                     <div style={{ flex: 1, fontSize: 13 }}><strong>{t.title}</strong> {t.artist && `— ${t.artist}`}</div>
                     <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
                       {t.bpm > 0 ? `${t.bpm} BPM` : ''}
@@ -276,7 +361,6 @@ export default function Home() {
           </div>
         </Panel>
 
-        {/* Setlist output */}
         {(loading || setlist) && (
           <Panel title="set list gerado" badge={setlist ? '● gerado com IA' : undefined}>
             {loading && (

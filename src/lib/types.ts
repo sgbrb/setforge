@@ -15,11 +15,10 @@ export interface Track {
 }
 
 export interface SetConfig {
-  eventType: string          // mantém
-  duration: string           // mantém
-  energyCurve: string        // mantém (agora com valores diferentes)
-  audience: string           // mantém
-  // targetBpm foi REMOVIDO
+  eventType: string
+  duration: string
+  energyCurve: string
+  audience: string
 }
 
 export interface SetlistTrack extends Track {

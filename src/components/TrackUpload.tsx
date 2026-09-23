@@ -7,7 +7,7 @@ import { findCompatibleTracks } from '@/lib/harmonic-utils'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 
 interface TrackUploadProps {
-  onAddTrack?: (track: Track) => void
+  onAddTrack?: (track: Track, durationSec?: number) => void
   onAddAnalysis?: (trackId: string, analysis: AudioAnalysis, durationSec: number) => void
   onQueueChange?: (stats: {
     total: number
@@ -32,7 +32,7 @@ interface QueueItem {
 }
 
 const POLL_INTERVAL_MS = 3000
-const MAX_POLL_ATTEMPTS = 400  // ~20 minutos por faixa
+const MAX_POLL_ATTEMPTS = 400
 
 export default function TrackUpload({
   onAddTrack,
@@ -66,7 +66,6 @@ export default function TrackUpload({
   }, [queue])
 
   const processItem = async (item: QueueItem) => {
-    // 1. BPM local (client-side, music-tempo)
     setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'analyzing-bpm' } : q))
 
     let detectedBpm: number | null = null
@@ -100,7 +99,6 @@ export default function TrackUpload({
     } catch (error) {
       console.warn(`[TrackUpload] BPM local falhou para "${item.file.name}". Vai seguir pro Python.`, error)
       bpmLocalFailed = true
-      // Não descarta — vai pro Python mesmo assim. O Python detecta BPM via GPU.
     }
 
     if (cancelRef.current) {
@@ -108,7 +106,6 @@ export default function TrackUpload({
       return
     }
 
-    // 2. Cria a faixa (BPM pode ser 0 — o Python corrige depois)
     const newTrack: Track = {
       id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: item.file.name.replace(/\.[^/.]+$/, ''),
@@ -124,14 +121,14 @@ export default function TrackUpload({
       setCompatible(matches)
     }
 
-    if (onAddTrack) onAddTrack(newTrack)
+    // 🔧 Passa o durationSec para o POST já salvar no banco
+    if (onAddTrack) onAddTrack(newTrack, durationSec)
 
     setQueue(prev => prev.map(q => q.id === item.id
       ? { ...q, status: 'analyzing-structure', bpm: detectedBpm ?? 0, trackId: newTrack.id }
       : q
     ))
 
-    // 3. Análise estrutural (job + polling)
     try {
       const fd = new FormData()
       fd.append('file', item.file)
@@ -145,6 +142,8 @@ export default function TrackUpload({
 
       let attempts = 0
       let finalResult: AudioAnalysis | null = null
+      let consecutiveErrors = 0
+      const MAX_CONSECUTIVE_ERRORS = 5
 
       while (attempts < MAX_POLL_ATTEMPTS) {
         if (cancelRef.current) {
@@ -157,7 +156,15 @@ export default function TrackUpload({
 
         try {
           const pollRes = await fetch(`/api/analyze-track?jobId=${job_id}`)
-          if (!pollRes.ok) continue
+          if (!pollRes.ok) {
+            consecutiveErrors++
+            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+              throw new Error(`Poll falhou ${consecutiveErrors}x seguidos (status ${pollRes.status})`)
+            }
+            continue
+          }
+          consecutiveErrors = 0
+
           const data = await pollRes.json()
 
           if (data.status === 'done' && data.result) {
@@ -168,6 +175,10 @@ export default function TrackUpload({
             throw new Error(data.error || 'Erro no job')
           }
         } catch (pollErr) {
+          consecutiveErrors++
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            throw pollErr
+          }
           console.warn('[TrackUpload] Poll falhou:', pollErr)
         }
       }

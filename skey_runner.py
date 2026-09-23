@@ -17,6 +17,12 @@ import os
 import sys
 import json
 
+# 🔧 Força UTF-8 no stdout/stderr (evita 'charmap' codec error no Windows)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # ─────────────────────────────────────────────────────────────
 # FFmpeg (necessário pro S-KEY)
 # ─────────────────────────────────────────────────────────────
@@ -105,21 +111,36 @@ def main():
     try:
         from skey import detect_key
 
-        # O S-KEY aceita arquivo único OU pasta
+        print(f"[key_runner] Chamando detect_key com audio_path={audio_path}", file=sys.stderr)
+
+        # ⚠️ Não passar 'extension' quando é arquivo único (doc oficial)
         result = detect_key(
             audio_path=audio_path,
-            extension="mp3",
             device="cpu",
             cli=False,
         )
 
-        if not result or len(result) == 0:
-            print(json.dumps({"ok": False, "error": "S-KEY não retornou nenhuma key"}))
+        print(f"[key_runner] detect_key retornou: type={type(result)}, value={result}", file=sys.stderr)
+
+        if result is None:
+            print(json.dumps({
+                "ok": False,
+                "error": "S-KEY retornou None (provavelmente falhou ao processar o arquivo)",
+            }))
+            sys.exit(1)
+
+        if not isinstance(result, list) or len(result) == 0:
+            print(json.dumps({
+                "ok": False,
+                "error": f"S-KEY retornou formato inesperado: {type(result)} = {result}",
+            }))
             sys.exit(1)
 
         # Pega o primeiro resultado
         key_str = result[0]
         camelot = to_camelot(key_str)
+
+        print(f"[key_runner] Key detectada: {key_str} → Camelot: {camelot}", file=sys.stderr)
 
         print(json.dumps({
             "ok": True,
@@ -129,6 +150,8 @@ def main():
 
     except Exception as e:
         import traceback
+        print(f"[key_runner] EXCEÇÃO: {e}", file=sys.stderr)
+        print(f"[key_runner] Traceback: {traceback.format_exc()}", file=sys.stderr)
         print(json.dumps({
             "ok": False,
             "error": str(e),
