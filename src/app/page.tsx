@@ -15,16 +15,18 @@ interface QueueStats {
   errors: number
 }
 
+// Config padrão (o painel de config foi removido — esses valores são fixos)
+const DEFAULT_CONFIG: SetConfig = {
+  eventType: 'Balada eletrônica',
+  duration: '2 horas',
+  energyCurve: 'aquecer (começa suave, vai subindo)',
+  audience: '',
+}
+
 export default function Home() {
   const { status } = useSession()
 
   const [tracks, setTracks] = useState<Track[]>([])
-  const [config, setConfig] = useState<SetConfig>({
-    eventType: 'Balada eletrônica',
-    duration: '2 horas',
-    energyCurve: 'aquecer (começa suave, vai subindo)',
-    audience: '',
-  })
   const [setlist, setSetlist] = useState<GeneratedSetlist | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -69,7 +71,7 @@ export default function Home() {
     setSetlist(null)
   }
 
-    // Recebe a análise estrutural do TrackUpload
+  // Recebe a análise estrutural do TrackUpload
   const handleAddAnalysis = (
     trackId: string,
     analysis: AudioAnalysis & { key?: string; bpm?: number },
@@ -84,7 +86,6 @@ export default function Home() {
       return {
         ...t,
         key: analysis.key || t.key,
-        // Só sobrescreve o BPM se a análise trouxe um valor válido
         bpm: analysis.bpm && analysis.bpm > 0 ? analysis.bpm : t.bpm,
       }
     }))
@@ -104,7 +105,7 @@ export default function Home() {
       const res = await fetch('/api/generate-setlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: tracksForAI, config }),
+        body: JSON.stringify({ tracks: tracksForAI, config: DEFAULT_CONFIG }),
       })
 
       if (res.status === 401) {
@@ -222,73 +223,6 @@ export default function Home() {
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 20px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-        {/* Config */}
-        <Panel title="configuração do set">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-            {/* Onde vai tocar */}
-            <Field label="🎧 Onde você vai tocar?">
-              <select value={config.eventType} onChange={e => setConfig(c => ({ ...c, eventType: e.target.value }))}>
-                {['Balada eletrônica','Festa aberta / open bar','Casamento','Corporativo','Festival','Bar / Lounge'].map(v => <option key={v}>{v}</option>)}
-              </select>
-            </Field>
-
-            {/* Quanto tempo */}
-            <Field label="⏱ Quanto tempo de set?">
-              <select value={config.duration} onChange={e => setConfig(c => ({ ...c, duration: e.target.value }))}>
-                {['1 hora','2 horas','3 horas','4 horas','5+ horas'].map(v => <option key={v}>{v}</option>)}
-              </select>
-            </Field>
-
-            {/* Como a pista deve reagir */}
-            <Field label="⚡ Como a pista deve reagir?">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[
-                  { value: 'aquecer (começa suave, vai subindo)', label: 'Aquecer devagar e explodir no final' },
-                  { value: 'constante alta energia', label: 'Manter energia alta o tempo todo' },
-                  { value: 'pico no meio (sobe, pico, desce)', label: 'Pico no meio e descer no final' },
-                  { value: 'montanha russa (variada)', label: 'Altos e baixos (montanha-russa)' },
-                ].map(opt => (
-                  <label
-                    key={opt.value}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: '10px 14px',
-                      background: config.energyCurve === opt.value ? 'rgba(124, 92, 252, 0.1)' : 'var(--surface2)',
-                      border: `1px solid ${config.energyCurve === opt.value ? 'var(--accent)' : 'var(--border)'}`,
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name="energyCurve"
-                      checked={config.energyCurve === opt.value}
-                      onChange={() => setConfig(c => ({ ...c, energyCurve: opt.value }))}
-                      style={{ accentColor: 'var(--accent)' }}
-                    />
-                    {opt.label}
-                  </label>
-                ))}
-              </div>
-            </Field>
-
-            {/* Quem vai estar na pista */}
-            <Field label="👥 Quem vai estar na pista? (opcional)">
-              <input
-                type="text"
-                value={config.audience}
-                onChange={e => setConfig(c => ({ ...c, audience: e.target.value }))}
-                placeholder="ex: público jovem 20-30 anos, fãs de house music..."
-              />
-            </Field>
-          </div>
-        </Panel>
-
         {/* Library */}
         <Panel title="biblioteca de músicas" badge={libraryBadge}>
           <TrackUpload
@@ -375,15 +309,6 @@ function Panel({ title, badge, children }: { title: string; badge?: string; chil
         {badge && <span style={{ fontSize: 12, color: 'var(--green)', fontFamily: 'var(--font-mono, monospace)' }}>{badge}</span>}
       </div>
       <div style={{ padding: 24 }}>{children}</div>
-    </div>
-  )
-}
-
-function Field({ label, children, full }: { label: string; children: React.ReactNode; full?: boolean }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, gridColumn: full ? '1 / -1' : undefined }}>
-      <label style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>{label}</label>
-      {children}
     </div>
   )
 }

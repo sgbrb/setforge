@@ -29,6 +29,7 @@ next-env.d.ts
 
 # python
 .venv/
+.venv-skey/
 venv/
 __pycache__/
 *.py[cod]
@@ -54,7 +55,3 @@ __pycache__/
 teste_*.py
 teste_*.txt
 pacotes.txt
-
-# scripts de teste/debug
-teste_*.py
-teste_*.txt
