@@ -1,5 +1,6 @@
 export interface Track {
   id: string
+  folderId?: string | null       // 🆕 pasta à qual pertence (null = sem pasta)
   title: string
   artist: string
   bpm: number
@@ -12,6 +13,13 @@ export interface Track {
   previewUrl?: string
   artworkUrl?: string
   durationMs?: number
+}
+
+export interface Folder {
+  id: string
+  name: string
+  trackCount: number
+  createdAt: string
 }
 
 export interface SetConfig {

@@ -20,16 +20,16 @@ export interface AudioAnalysis {
  */
 export interface MixTimeline {
   // Instruções em segundos (timeline da Faixa A)
-  playAtSec: number          // quando o DJ dá play na Faixa A (0 = início)
-  crossfadeStartSec: number  // quando começar o crossfade
-  crossfadeEndSec: number    // quando terminar o crossfade
-  stopASec: number           // quando desligar a faixa A
+  playAtSec: number
+  crossfadeStartSec: number
+  crossfadeEndSec: number
+  stopASec: number
 
-  // 🆕 Instruções sobre a Faixa B (em segundos da Faixa B)
-  playBAtSec: number         // em qual segundo da Faixa B dar play (normalmente 0)
-  playBAtFormatted: string   // "0:00" ou "0:30" (se pular intro)
-  introEndBSec: number       // quando o beat principal da Faixa B entra
-  introEndBFormatted: string // "0:30"
+  // Instruções sobre a Faixa B (em segundos da Faixa B)
+  playBAtSec: number
+  playBAtFormatted: string
+  introEndBSec: number
+  introEndBFormatted: string
 
   // Instruções formatadas (M:SS) — o que o DJ vê
   playAtFormatted: string
@@ -84,33 +84,55 @@ export function findIntroEnd(segments: AudioSegment[]): { time: number; confiden
 /**
  * Encontra o "outro start" — o momento em que o DJ deve começar a mixagem
  * para sair da faixa A.
+ *
+ * 🆕 CORREÇÃO: valida se o all-in-one-infer cobriu a faixa inteira.
+ * Se o último segmento termina muito antes da duração real, usa
+ * um fallback baseado em 75% da duração.
  */
 export function findOutroStart(
   segments: AudioSegment[],
   trackDurationSec: number
 ): { time: number; confidence: 'high' | 'medium' | 'low' } {
+  // 1. Outro explícito
   const outro = segments.find(s => s.label === 'outro')
   if (outro) {
     return { time: outro.start, confidence: 'high' }
   }
 
+  // 2. Último breakdown
   const breakdowns = segments.filter(s => s.label === 'breakdown')
   if (breakdowns.length > 0) {
     const lastBreakdown = breakdowns[breakdowns.length - 1]
     return { time: lastBreakdown.start, confidence: 'high' }
   }
 
+  // 3. Último drop ou chorus
   const lastDrop = [...segments].reverse().find(s => s.label === 'drop' || s.label === 'chorus')
   if (lastDrop) {
     return { time: lastDrop.start, confidence: 'medium' }
   }
 
-  const lastVerse = [...segments].reverse().find(s => s.label === 'verse')
-  if (lastVerse) {
-    return { time: lastVerse.start, confidence: 'low' }
+  // 4. 🆕 Valida cobertura dos segmentos
+  if (segments.length > 0) {
+    const lastSeg = segments[segments.length - 1]
+
+    // Se o último segmento termina muito antes da duração total,
+    // o all-in-one-infer não cobriu a faixa inteira — usa fallback
+    const coverageRatio = lastSeg.end / trackDurationSec
+
+    if (coverageRatio < 0.5) {
+      // Cobertura < 50%: usa 75% da duração real
+      return {
+        time: trackDurationSec * 0.75,
+        confidence: 'low',
+      }
+    }
+
+    return { time: lastSeg.start, confidence: 'low' }
   }
 
-  return { time: trackDurationSec * 0.7, confidence: 'low' }
+  // 5. Fallback absoluto: 75% da duração
+  return { time: trackDurationSec * 0.75, confidence: 'low' }
 }
 
 /**
@@ -130,9 +152,8 @@ export function roundToNearestBar(
 /**
  * Calcula a timeline de mixagem entre duas faixas.
  *
- * 🎯 NOVO: calcula também o `playBAtSec` — em qual segundo da Faixa B
- * o DJ deve dar play, para que o beat principal da B entre alinhado
- * com o início do crossfade na Faixa A.
+ * - Calcula `playBAtSec` — em qual segundo da Faixa B dar play
+ * - O crossfade considera o espaço REAL disponível
  */
 export function calculateMixTimeline(
   trackA: Track,
@@ -146,48 +167,49 @@ export function calculateMixTimeline(
   // 1. Ponto de saída na faixa A
   const outro = findOutroStart(analysisA.segments, durationA)
 
-  // 2. 🆕 Ponto de entrada na faixa B (quando o beat principal entra)
+  // 2. Ponto de entrada na faixa B
   const introB = findIntroEnd(analysisB.segments)
 
   // 3. BPM para cálculo de barras
   const bpm = analysisA.bpm || trackA.bpm || 120
   const barDuration = secondsPerBar(bpm)
 
-  // 4. Duração do crossfade
-  const remainingA = durationA - outro.time
+  // 4. Duração do crossfade — considera espaço REAL disponível
+  const outroTime = outro.time
+  const remainingA = durationA - outroTime
   const introBDuration = introB.time
 
-  let crossfadeBars = 16
-  if (introBDuration < barDuration * 16 && introBDuration >= barDuration * 8) {
-    crossfadeBars = 8
-    notes.push('Intro da faixa B é curto — crossfade reduzido para 8 barras')
-  } else if (remainingA < barDuration * 16) {
-    crossfadeBars = 8
-    notes.push('Faixa A está perto do fim — crossfade reduzido para 8 barras')
-  } else if (remainingA >= barDuration * 32 && introBDuration >= barDuration * 32) {
-    crossfadeBars = 32
+  const maxCrossfadeSec = Math.min(
+    remainingA,
+    introBDuration,
+    outroTime
+  )
+
+  // Escolhe o número de barras que CABE no espaço disponível
+  const candidates = [32, 16, 8, 4]
+  let crossfadeBars = 4
+  for (const bars of candidates) {
+    if (barDuration * bars <= maxCrossfadeSec) {
+      crossfadeBars = bars
+      break
+    }
+  }
+
+  if (crossfadeBars < 16) {
+    notes.push(`Espaço limitado na faixa A — crossfade reduzido para ${crossfadeBars} barras`)
+  } else if (crossfadeBars === 32) {
     notes.push('Espaço de sobra — crossfade estendido para 32 barras')
   }
 
   const crossfadeDuration = barDuration * crossfadeBars
 
   // 5. Crossfade termina quando a faixa A for desligada
-  const crossfadeEnd = roundToNearestBar(outro.time, bpm, 16)
+  const crossfadeEnd = outroTime
 
   // 6. Crossfade começa = fim - duração
   const crossfadeStart = Math.max(0, crossfadeEnd - crossfadeDuration)
 
-  // 7. 🆕 playBAt: quando dar play na Faixa B
-  //
-  // Queremos que o BEAT PRINCIPAL da Faixa B (introEndB) caia exatamente
-  // no crossfadeStart. Então:
-  //
-  //   playBAt = crossfadeStart - introEndB
-  //
-  // Se introEndB for 0 (faixa começa direto com o beat), playBAt = crossfadeStart.
-  // Se playBAt for negativo, significa que a Faixa B não tem intro suficiente
-  // para cobrir o crossfade — aí damos play em 0 e a faixa B entra "no meio".
-  //
+  // 7. playBAt: quando dar play na Faixa B
   const playBAtRaw = crossfadeStart - introB.time
   const playBAtSec = Math.max(0, playBAtRaw)
 
@@ -219,7 +241,6 @@ export function calculateMixTimeline(
     crossfadeEndSec: crossfadeEnd,
     stopASec: crossfadeEnd,
 
-    // 🆕 Campos da Faixa B
     playBAtSec,
     playBAtFormatted: formatSeconds(playBAtSec),
     introEndBSec: introB.time,
