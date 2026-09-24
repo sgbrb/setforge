@@ -37,6 +37,7 @@ CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
+ANALYZE_LOCK = threading.Lock()   # 🆕 serializa análises (só 1 GPU)
 
 print("[startup] Flask app criado.", flush=True)
 
@@ -125,28 +126,38 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
         print(f"[job {job_id}] Iniciando análise de {original_name}...", flush=True)
         with JOBS_LOCK:
             JOBS[job_id]["status"] = "processing"
-        t0 = time.time()
 
-        # all-in-one-infer (síncrono, roda na thread)
-        import torch
-        torch.set_default_device("cuda")
-        from allin1_infer import analyze
-        result = analyze(
-            tmp_path,
-            device="cuda",
-            demucs_fp16=True,
-            demucs_overlap=0.1,
+        # 🆕 Lock global: só uma análise por vez.
+        # Serializa o uso da GPU e evita disputa de contexto CUDA entre threads.
+        with ANALYZE_LOCK:
+            t0 = time.time()
+
+            import torch
+            torch.set_default_device("cuda")
+            from allin1_infer import analyze
+            result = analyze(
+                tmp_path,
+                device="cuda",
+                demucs_fp16=True,
+                demucs_overlap=0.25,     # 🆕 Reduzido de 0.5 → menos tempo segurando o GIL
+                keep_byproducts=False,
+                multiprocess=False,      # 🆕 Desligado (evita processos filhos + EADDRINUSE)
+            )
+
+            # S-KEY (síncrono) — também dentro do lock (usa GPU)
+            key_camelot = ''
+            if result.bpm and result.bpm >= 100:
+                key_camelot = detect_key_skey(skey_path)
+            else:
+                print(f"[job {job_id}] BPM {result.bpm} < 100 — pulando key", flush=True)
+
+            elapsed = time.time() - t0
+
+        print(
+            f"[job {job_id}] Concluído em {elapsed:.1f}s — "
+            f"BPM {result.bpm}, {len(result.segments)} segmentos, key {key_camelot or '?'}",
+            flush=True,
         )
-
-        # S-KEY (síncrono)
-        key_camelot = ''
-        if result.bpm and result.bpm >= 100:
-            key_camelot = detect_key_skey(skey_path)
-        else:
-            print(f"[job {job_id}] BPM {result.bpm} < 100 — pulando key", flush=True)
-
-        elapsed = time.time() - t0
-        print(f"[job {job_id}] Concluído em {elapsed:.1f}s — BPM {result.bpm}, {len(result.segments)} segmentos, key {key_camelot or '?'}", flush=True)
 
         segments = [{
             "start": round(float(seg.start), 2),
@@ -204,7 +215,10 @@ def analyze_audio():
     print(f"[analyze] Job {job_id} criado para {file.filename} ({file_size_mb} MB)", flush=True)
 
     # 🔑 Roda em THREAD separada (background)
-    thread = threading.Thread(target=_run_analysis, args=(job_id, tmp_path, file.filename or "unknown.mp3"))
+    thread = threading.Thread(
+        target=_run_analysis,
+        args=(job_id, tmp_path, file.filename or "unknown.mp3"),
+    )
     thread.daemon = True
     thread.start()
 
