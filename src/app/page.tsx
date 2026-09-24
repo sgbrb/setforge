@@ -207,8 +207,22 @@ export default function Home() {
       .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
   }
 
-  // 🧹 Limpa biblioteca (apenas faixas visíveis)
+  // 🧹 Limpa biblioteca (apenas faixas visíveis) — 🆕 COM CONFIRMAÇÃO
   const clearLibrary = () => {
+    const count = filteredTracks.length
+    const scope = selectedFolderId === 'all' ? 'biblioteca inteira' : 'esta pasta'
+
+    const confirmed = window.confirm(
+      `Tem certeza que quer apagar ${count} faixa${count !== 1 ? 's' : ''} da ${scope}?\n\n` +
+      `Essa ação é IRREVERSÍVEL. As análises estruturais serão perdidas ` +
+      `(leva ~2 min por faixa pra refazer).`
+    )
+
+    if (!confirmed) {
+      console.log('[page] clearLibrary cancelado pelo usuário')
+      return
+    }
+
     const ids = filteredTracks.map(t => t.id)
     setTracks(prev => prev.filter(t => !ids.includes(t.id)))
     setAnalyses(prev => {

@@ -10,7 +10,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 
-const TIMEOUT_MS = 90_000
+const TIMEOUT_MS = 300_000  // 5 min — margem para modelos free lentos
+
+// ⚠️ MODELO ATUAL: grátis (pode dar 429/503, sujeito a pool compartilhado)
+// 🔜 QUANDO TIVER CRÉDITO WISE: trocar por 'openai/gpt-4o-mini' (pago, estável)
+const MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
 
 interface GenerateRequest {
   tracks: Track[]
@@ -21,7 +25,19 @@ function normalizeTitle(s: string): string {
   return (s || '').toLowerCase().trim().replace(/\s+/g, ' ')
 }
 
+function cleanTitle(s: string): string {
+  if (!s || typeof s !== 'string') return ''
+  return normalizeTitle(s)
+    .replace(/[_\-]pn$/i, '')
+    .replace(/\s*\(original mix\)\s*/gi, '')
+    .replace(/\s*\(remix\)\s*/gi, '')
+    .replace(/\s*\[.*?\]\s*/g, '')
+    .trim()
+}
+
 function findOriginalTrack(setlistTrack: any, tracks: Track[]): Track | undefined {
+  if (!setlistTrack?.title) return undefined
+
   const aiTitle = normalizeTitle(setlistTrack.title)
   const aiBpm = Number(setlistTrack.bpm)
 
@@ -37,15 +53,7 @@ function findOriginalTrack(setlistTrack: any, tracks: Track[]): Track | undefine
   original = tracks.find((t) => normalizeTitle(t.title) === aiTitle)
   if (original) return original
 
-  // 3. Remove sufixos comuns: "_pn", "-pn", " (Original Mix)", "(Remix)", "[...]"
-  const cleanTitle = (s: string) =>
-    normalizeTitle(s)
-      .replace(/[_\-]pn$/i, '')
-      .replace(/\s*\(original mix\)\s*/gi, '')
-      .replace(/\s*\(remix\)\s*/gi, '')
-      .replace(/\s*\[.*?\]\s*/g, '')
-      .trim()
-
+  // 3. Remove sufixos comuns
   const aiClean = cleanTitle(aiTitle)
   original = tracks.find((t) => cleanTitle(t.title) === aiClean)
   if (original) return original
@@ -84,7 +92,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 🎯 A2: Ordem pré-calculada pelo algoritmo local
     const orderedList = tracks
       .map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || '?'}, Tom: ${t.key || '?'}, Energia: ${t.energy}/10)`)
       .join('\n')
@@ -148,8 +155,6 @@ Sua tarefa:
 
 Retorne APENAS o JSON no formato especificado.`
 
-    const MODEL = 'cohere/north-mini-code:free'
-
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
@@ -167,17 +172,39 @@ Retorne APENAS o JSON no formato especificado.`
           ],
           temperature: 0.5,
           max_tokens: 8192,
-          response_format: { type: 'json_object' },
-        },
+        } as any,
         { signal: controller.signal }
       )
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') {
-        throw new Error(`O modelo demorou mais de ${TIMEOUT_MS / 1000}s para responder. Tente de novo.`)
+      const errName = (err as any)?.name
+      const errStatus = (err as any)?.status
+
+      if (errName === 'AbortError' || errName === 'APIUserAbortError') {
+        return NextResponse.json(
+          { error: `O modelo demorou mais de ${TIMEOUT_MS / 1000}s. Tente de novo ou reduza o número de faixas.` },
+          { status: 504 }
+        )
       }
+
+      // 429 vira 503 (retry) em vez de 500 (erro fatal)
+      if (errStatus === 429) {
+        return NextResponse.json(
+          { error: 'Modelo temporariamente sobrecarregado. Aguarde 30s e tente de novo.' },
+          { status: 503 }
+        )
+      }
+
       throw err
     } finally {
       clearTimeout(timeoutId)
+    }
+
+    if (!completion?.choices?.length) {
+      console.error('[OpenRouter] Resposta sem choices:', JSON.stringify(completion).slice(0, 500))
+      return NextResponse.json(
+        { error: 'Resposta inválida do modelo (sem choices). Tente de novo.' },
+        { status: 502 }
+      )
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
@@ -195,8 +222,9 @@ Retorne APENAS o JSON no formato especificado.`
         finishReason,
         usage: completion.usage,
       })
-      throw new Error(
-        `Resposta vazia do modelo (finish: ${finishReason}). Tente novamente.`
+      return NextResponse.json(
+        { error: `Resposta vazia do modelo (finish: ${finishReason}). Tente novamente.` },
+        { status: 502 }
       )
     }
 
@@ -219,38 +247,46 @@ Retorne APENAS o JSON no formato especificado.`
           parsed = JSON.parse(extracted)
           console.log('[SetForge] JSON reparado com sucesso')
         } catch {
-          throw new Error(
-            `JSON inválido do modelo (${cleanJson.length} chars). ` +
-            `Resposta foi truncada — tente de novo ou reduza o número de faixas.`
+          return NextResponse.json(
+            { error: `JSON inválido do modelo (${cleanJson.length} chars). Resposta foi truncada — tente de novo ou reduza o número de faixas.` },
+            { status: 502 }
           )
         }
       } else {
-        throw parseError
+        return NextResponse.json(
+          { error: `JSON inválido do modelo. Tente novamente.` },
+          { status: 502 }
+        )
       }
     }
 
-    // 🔑 REINJEÇÃO DE IDs
-    if (Array.isArray(parsed.setlist)) {
-      const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
-        const original = findOriginalTrack(setlistTrack, tracks)
-
-        if (original) {
-          console.log(`[SetForge] Match OK: "${setlistTrack.title}" → id=${original.id}`)
-        } else {
-          console.warn(`[SetForge] SEM MATCH: "${setlistTrack.title}" (BPM ${setlistTrack.bpm})`)
-        }
-
-        return {
-          ...setlistTrack,
-          id: original?.id ?? `gen-${Math.random().toString(36).slice(2, 10)}`,
-          artist: original?.artist || setlistTrack.artist || '',
-        }
-      })
-
-      parsed.setlist = tracksWithIds
+    if (!Array.isArray(parsed?.setlist) || parsed.setlist.length === 0) {
+      console.error('[SetForge] parsed.setlist inválido:', JSON.stringify(parsed).slice(0, 500))
+      return NextResponse.json(
+        { error: 'O modelo não retornou um setlist válido. Tente novamente.' },
+        { status: 502 }
+      )
     }
 
-    // ⚠️ Aviso se descartou faixas
+    // 🔑 REINJEÇÃO DE IDs
+    const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
+      const original = findOriginalTrack(setlistTrack, tracks)
+
+      if (original) {
+        console.log(`[SetForge] Match OK: "${setlistTrack.title}" → id=${original.id}`)
+      } else {
+        console.warn(`[SetForge] SEM MATCH: "${setlistTrack.title}" (BPM ${setlistTrack.bpm})`)
+      }
+
+      return {
+        ...setlistTrack,
+        id: original?.id ?? `gen-${Math.random().toString(36).slice(2, 10)}`,
+        artist: original?.artist || setlistTrack.artist || '',
+      }
+    })
+
+    parsed.setlist = tracksWithIds
+
     if (parsed.setlist.length < tracks.length) {
       console.warn(
         `[SetForge] OpenRouter usou ${parsed.setlist.length} de ${tracks.length} faixas ` +
