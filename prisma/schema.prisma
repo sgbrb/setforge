@@ -20,13 +20,14 @@ model User {
 }
 
 model Folder {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   tracks    Track[]
+  setlists  Setlist[]
 
   @@index([userId])
 }
@@ -63,16 +64,22 @@ model Setlist {
   djTip         String?
   peakMoment    String?
   totalDuration String?
-  tracks        SetlistTrack[]
   userId        String
+  folderId      String?
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder        Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tracks        SetlistTrack[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([folderId])
 }
 
 model SetlistTrack {
   id             String  @id @default(cuid())
   position       Int
+  trackId        String?  // 🆕 ID original da faixa (upload-xxx)
   title          String
   artist         String
   bpm            Int

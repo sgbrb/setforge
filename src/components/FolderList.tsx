@@ -12,6 +12,8 @@ interface FolderListProps {
   onCreate: (name: string) => Promise<void>
   onDelete: (folderId: string) => Promise<void>
   onRename: (folderId: string, newName: string) => Promise<void>
+  onDropTrack?: (trackId: string, folderId: string | null) => void
+  draggingTrackId?: string | null
 }
 
 export default function FolderList({
@@ -23,11 +25,12 @@ export default function FolderList({
   onCreate,
   onDelete,
   onRename,
+  onDropTrack,
+  draggingTrackId,
 }: FolderListProps) {
   const [isCreating, setIsCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
 
@@ -58,19 +61,23 @@ export default function FolderList({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-      }}>
-        <p style={{
-          fontSize: 11,
-          color: 'var(--muted)',
-          fontFamily: 'var(--font-mono, monospace)',
-          textTransform: 'uppercase',
-          letterSpacing: 1,
-        }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 4,
+        }}
+      >
+        <p
+          style={{
+            fontSize: 11,
+            color: 'var(--muted)',
+            fontFamily: 'var(--font-mono, monospace)',
+            textTransform: 'uppercase',
+            letterSpacing: 1,
+          }}
+        >
           minhas pastas
         </p>
         <button
@@ -95,7 +102,6 @@ export default function FolderList({
         </button>
       </div>
 
-      {/* Input de criar pasta */}
       {isCreating && (
         <div style={{ display: 'flex', gap: 6 }}>
           <input
@@ -137,7 +143,6 @@ export default function FolderList({
         </div>
       )}
 
-      {/* "Todas as faixas" */}
       <FolderRow
         icon="▦"
         name="todas as faixas"
@@ -146,26 +151,30 @@ export default function FolderList({
         onClick={() => onSelect('all')}
       />
 
-      {/* "Sem pasta" — só mostra se tiver faixas órfãs */}
-      {tracksWithoutFolder > 0 && (
+      {/* "Sem pasta" — aceita drop também */}
+      {(tracksWithoutFolder > 0 || draggingTrackId) && (
         <FolderRow
           icon="◌"
           name="sem pasta"
           count={tracksWithoutFolder}
           isSelected={selectedFolderId === null}
           onClick={() => onSelect(null)}
+          onDropTrack={onDropTrack}
+          dropFolderId={null}
+          draggingTrackId={draggingTrackId}
         />
       )}
 
-      {/* Lista de pastas */}
       {folders.length === 0 && !isCreating && (
-        <p style={{
-          fontSize: 12,
-          color: 'var(--muted)',
-          fontFamily: 'var(--font-mono, monospace)',
-          fontStyle: 'italic',
-          padding: '8px 4px',
-        }}>
+        <p
+          style={{
+            fontSize: 12,
+            color: 'var(--muted)',
+            fontFamily: 'var(--font-mono, monospace)',
+            fontStyle: 'italic',
+            padding: '8px 4px',
+          }}
+        >
           nenhuma pasta ainda
         </p>
       )}
@@ -212,15 +221,15 @@ export default function FolderList({
               onDelete(folder.id)
             }
           }}
+          onDropTrack={onDropTrack}
+          dropFolderId={folder.id}
+          draggingTrackId={draggingTrackId}
         />
       ))}
     </div>
   )
 }
 
-/**
- * Linha de uma pasta (ou de "todas as faixas" / "sem pasta").
- */
 function FolderRow({
   icon,
   name,
@@ -234,6 +243,9 @@ function FolderRow({
   onEditSave,
   onEditCancel,
   onDelete,
+  onDropTrack,
+  dropFolderId,
+  draggingTrackId,
 }: {
   icon: string
   name: string
@@ -247,14 +259,36 @@ function FolderRow({
   onEditSave?: () => void
   onEditCancel?: () => void
   onDelete?: () => void
+  onDropTrack?: (trackId: string, folderId: string | null) => void
+  dropFolderId?: string | null
+  draggingTrackId?: string | null
 }) {
+  const [isDragOver, setIsDragOver] = useState(false)
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     e.stopPropagation()
     if (e.key === 'Enter') onEditSave?.()
     if (e.key === 'Escape') onEditCancel?.()
   }
 
-  // Modo edição: mostra input no lugar do nome
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!onDropTrack || !draggingTrackId) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = () => setIsDragOver(false)
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    const trackId = e.dataTransfer.getData('text/plain') || draggingTrackId
+    if (trackId && onDropTrack) {
+      onDropTrack(trackId, dropFolderId ?? null)
+    }
+  }
+
   if (isEditing) {
     return (
       <div
@@ -293,53 +327,62 @@ function FolderRow({
     )
   }
 
-  // Modo normal
   return (
     <div
       onClick={onClick}
-      onDoubleClick={onStartEdit ? (e) => {
-        e.stopPropagation()
-        onStartEdit()
-      } : undefined}
+      onDoubleClick={onStartEdit ? (e) => { e.stopPropagation(); onStartEdit() } : undefined}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       title={onStartEdit ? 'Clique duas vezes para renomear' : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        padding: '8px 10px',
-        background: isSelected ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
-        border: `1px solid ${isSelected ? 'var(--accent)' : 'transparent'}`,
+        padding: '10px 12px',
+minHeight: 44,
+        background: isDragOver
+          ? 'rgba(124, 92, 252, 0.25)'
+          : isSelected
+          ? 'rgba(124, 92, 252, 0.15)'
+          : 'transparent',
+        border: `1px solid ${
+          isDragOver ? 'var(--accent)' : isSelected ? 'var(--accent)' : 'transparent'
+        }`,
         borderRadius: 6,
         cursor: 'pointer',
         transition: 'all 0.15s',
+        transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
+        boxShadow: isDragOver ? '0 0 0 3px rgba(124, 92, 252, 0.15)' : 'none',
       }}
     >
       <span style={{ fontSize: 14, lineHeight: 1, opacity: 0.8 }}>{icon}</span>
-      <span style={{
-        flex: 1,
-        fontSize: 13,
-        color: isSelected ? 'var(--text)' : 'var(--muted)',
-        fontWeight: isSelected ? 600 : 400,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
+      <span
+        style={{
+          flex: 1,
+          fontSize: 13,
+          color: isSelected || isDragOver ? 'var(--text)' : 'var(--muted)',
+          fontWeight: isSelected || isDragOver ? 600 : 400,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {name}
       </span>
-      <span style={{
-        fontSize: 11,
-        color: 'var(--muted)',
-        fontFamily: 'var(--font-mono, monospace)',
-        flexShrink: 0,
-      }}>
+      <span
+        style={{
+          fontSize: 11,
+          color: 'var(--muted)',
+          fontFamily: 'var(--font-mono, monospace)',
+          flexShrink: 0,
+        }}
+      >
         {count}
       </span>
       {onDelete && (
         <button
-          onClick={e => {
-            e.stopPropagation()
-            onDelete()
-          }}
+          onClick={e => { e.stopPropagation(); onDelete() }}
           title="Deletar pasta"
           style={{
             background: 'transparent',

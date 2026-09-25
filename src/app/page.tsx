@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import TrackUpload from '@/components/TrackUpload'
 import FolderList from '@/components/FolderList'
+import TrackList from '@/components/TrackList'
 import { Track, Folder, SetConfig, GeneratedSetlist } from '@/lib/types'
 import SetlistView from '@/components/SetlistView'
 import { computeOptimalOrder, scoreOrder } from '@/lib/optimal-order'
@@ -23,6 +24,10 @@ const DEFAULT_CONFIG: SetConfig = {
   audience: '',
 }
 
+// 🆕 Helper: pasta "real" = pasta específica (não 'all', não null)
+const isRealFolder = (id: string | null | 'all'): id is string =>
+  typeof id === 'string' && id !== 'all'
+
 export default function Home() {
   const { status } = useSession()
 
@@ -37,6 +42,7 @@ export default function Home() {
   const [durations, setDurations] = useState<Record<string, number>>({})
 
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
+  const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null)
 
   // 🔒 Redireciona se não estiver logado
   useEffect(() => {
@@ -75,12 +81,8 @@ export default function Home() {
         const newDurations: Record<string, number> = {}
 
         dbTracks.forEach(t => {
-          if (t.segments) {
-            newAnalyses[t.id] = t.segments as AudioAnalysis
-          }
-          if (t.durationSec && t.durationSec > 0) {
-            newDurations[t.id] = t.durationSec
-          }
+          if (t.segments) newAnalyses[t.id] = t.segments as AudioAnalysis
+          if (t.durationSec && t.durationSec > 0) newDurations[t.id] = t.durationSec
         })
 
         setTracks(mappedTracks)
@@ -128,6 +130,52 @@ export default function Home() {
     loadFolders()
   }, [status])
 
+  // 🎼 Carrega o setlist DA PASTA SELECIONADA (restaura após F5 / troca de pasta)
+  useEffect(() => {
+    if (status !== 'authenticated') return
+
+    // 🆕 Só busca setlist se for pasta real
+    if (!isRealFolder(selectedFolderId)) {
+      setSetlist(null)
+      return
+    }
+
+    let cancelled = false
+
+    const loadSetlistForFolder = async () => {
+      try {
+        const res = await fetch(
+          `/api/setlist?folderId=${encodeURIComponent(selectedFolderId)}`
+        )
+        if (!res.ok) {
+          console.warn('[page] Falha ao carregar setlist:', res.status)
+          return
+        }
+
+        const data = await res.json()
+        if (cancelled) return
+
+        if (data.setlist && data.setlist.length > 0) {
+          setSetlist(data)
+          console.log(
+            `[page] Setlist restaurado da pasta ${selectedFolderId}: ${data.setlist.length} faixas`
+          )
+        } else {
+          setSetlist(null)
+          console.log(`[page] Nenhum setlist salvo na pasta ${selectedFolderId}`)
+        }
+      } catch (err) {
+        if (!cancelled) console.error('[page] Erro ao carregar setlist:', err)
+      }
+    }
+
+    loadSetlistForFolder()
+
+    return () => {
+      cancelled = true
+    }
+  }, [status, selectedFolderId])
+
   // 🎯 Filtra faixas pela pasta selecionada
   const filteredTracks = (() => {
     if (selectedFolderId === 'all') return tracks
@@ -137,16 +185,19 @@ export default function Home() {
 
   const tracksWithoutFolder = tracks.filter(t => !t.folderId).length
 
+  // 🆕 Flag: pode montar setlist?
+  const canGenerateSetlist = isRealFolder(selectedFolderId)
+  const folderName = canGenerateSetlist
+    ? folders.find(f => f.id === selectedFolderId)?.name ?? 'pasta'
+    : null
+
   // ➕ Adiciona faixa (local + banco) — com folderId
   const addTrack = (track: Track, durationSec?: number) => {
     const folderId = (selectedFolderId === 'all' || selectedFolderId === null)
       ? null
       : selectedFolderId
 
-    const trackWithFolder: Track = {
-      ...track,
-      folderId,
-    }
+    const trackWithFolder: Track = { ...track, folderId }
 
     setTracks(prev => prev.find(t => t.id === track.id) ? prev : [...prev, trackWithFolder])
 
@@ -170,7 +221,6 @@ export default function Home() {
       })
       .catch(err => console.warn('[page] Erro ao salvar faixa:', err))
 
-    // Atualiza contador local da pasta
     if (folderId) {
       setFolders(prev => prev.map(f =>
         f.id === folderId ? { ...f, trackCount: f.trackCount + 1 } : f
@@ -183,18 +233,9 @@ export default function Home() {
     const track = tracks.find(t => t.id === id)
 
     setTracks(prev => prev.filter(t => t.id !== id))
-    setAnalyses(prev => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setDurations(prev => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
+    setAnalyses(prev => { const next = { ...prev }; delete next[id]; return next })
+    setDurations(prev => { const next = { ...prev }; delete next[id]; return next })
 
-    // Atualiza contador local da pasta
     if (track?.folderId) {
       setFolders(prev => prev.map(f =>
         f.id === track.folderId
@@ -207,7 +248,37 @@ export default function Home() {
       .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
   }
 
-  // 🧹 Limpa biblioteca (apenas faixas visíveis) — 🆕 COM CONFIRMAÇÃO
+  // 🔀 Move faixa pra uma pasta (ou pra "sem pasta" se folderId=null)
+  const moveTrackToFolder = (trackId: string, folderId: string | null) => {
+    const track = tracks.find(t => t.id === trackId)
+    if (!track) return
+    if (track.folderId === folderId) return
+
+    const oldFolderId = track.folderId
+
+    setTracks(prev => prev.map(t =>
+      t.id === trackId ? { ...t, folderId } : t
+    ))
+
+    setFolders(prev => prev.map(f => {
+      if (f.id === oldFolderId) return { ...f, trackCount: Math.max(0, f.trackCount - 1) }
+      if (f.id === folderId) return { ...f, trackCount: f.trackCount + 1 }
+      return f
+    }))
+
+    fetch('/api/tracks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: trackId, folderId }),
+    })
+      .then(res => {
+        if (!res.ok) console.warn('[page] Falha ao mover faixa:', res.status)
+        else console.log(`[page] Faixa movida: "${track.title}" → ${folderId ?? 'sem pasta'}`)
+      })
+      .catch(err => console.warn('[page] Erro ao mover faixa:', err))
+  }
+
+  // 🧹 Limpa biblioteca (apenas faixas visíveis) — COM CONFIRMAÇÃO
   const clearLibrary = () => {
     const count = filteredTracks.length
     const scope = selectedFolderId === 'all' ? 'biblioteca inteira' : 'esta pasta'
@@ -225,16 +296,8 @@ export default function Home() {
 
     const ids = filteredTracks.map(t => t.id)
     setTracks(prev => prev.filter(t => !ids.includes(t.id)))
-    setAnalyses(prev => {
-      const next = { ...prev }
-      ids.forEach(id => delete next[id])
-      return next
-    })
-    setDurations(prev => {
-      const next = { ...prev }
-      ids.forEach(id => delete next[id])
-      return next
-    })
+    setAnalyses(prev => { const next = { ...prev }; ids.forEach(id => delete next[id]); return next })
+    setDurations(prev => { const next = { ...prev }; ids.forEach(id => delete next[id]); return next })
     setSetlist(null)
 
     ids.forEach(id => {
@@ -242,7 +305,6 @@ export default function Home() {
         .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
     })
 
-    // Atualiza contador da pasta atual
     if (selectedFolderId && selectedFolderId !== 'all' && selectedFolderId !== null) {
       setFolders(prev => prev.map(f =>
         f.id === selectedFolderId ? { ...f, trackCount: 0 } : f
@@ -288,15 +350,9 @@ export default function Home() {
     }
 
     setFolders(prev => prev.filter(f => f.id !== folderId))
+    setTracks(prev => prev.map(t => t.folderId === folderId ? { ...t, folderId: null } : t))
 
-    setTracks(prev => prev.map(t =>
-      t.folderId === folderId ? { ...t, folderId: null } : t
-    ))
-
-    if (selectedFolderId === folderId) {
-      setSelectedFolderId('all')
-    }
-
+    if (selectedFolderId === folderId) setSelectedFolderId('all')
     console.log('[page] Pasta deletada:', folderId)
   }
 
@@ -355,8 +411,48 @@ export default function Home() {
       .catch(err => console.warn('[page] Erro ao salvar análise:', err))
   }
 
+  // 🗑 Apaga a análise estrutural de uma faixa (mas mantém a faixa)
+  const clearAnalysis = (trackId: string) => {
+    setAnalyses(prev => {
+      const next = { ...prev }
+      delete next[trackId]
+      return next
+    })
+
+    fetch('/api/tracks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: trackId,
+        key: '',
+        bpm: 0,
+        segments: null,
+      }),
+    })
+      .then(res => {
+        if (!res.ok) console.warn('[page] Falha ao apagar análise:', res.status)
+        else console.log('[page] Análise apagada:', trackId)
+      })
+      .catch(err => console.warn('[page] Erro ao apagar análise:', err))
+  }
+
+  // 🎼 Gera setlist via IA
   const generate = async () => {
-    if (filteredTracks.length < 3) return
+    // 🆕 Guarda-corpo: só gera se for pasta real
+    if (!canGenerateSetlist) {
+      alert(
+        'Selecione uma pasta específica para montar o setlist.\n\n' +
+        'A lista "todas as faixas" serve apenas como repositório de uploads — ' +
+        'crie uma pasta (ex: "festa"), arraste as faixas pra lá, e monte o setlist dentro dela.'
+      )
+      return
+    }
+
+    if (filteredTracks.length < 3) {
+      alert(`A pasta "${folderName}" precisa de pelo menos 3 faixas pra montar o setlist.`)
+      return
+    }
+
     setLoading(true)
     setSetlist(null)
     try {
@@ -365,13 +461,12 @@ export default function Home() {
 
       console.log(`[page] Ordem ótima local: score médio ${optimalScore}%`)
       console.log(`[page] Ordem sugerida:`, optimalOrder.map(t => t.title).join(' → '))
-
-      const tracksForAI = optimalOrder
+      console.log(`[page] Pasta: ${folderName} (${filteredTracks.length} faixas)`)
 
       const res = await fetch('/api/generate-setlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: tracksForAI, config: DEFAULT_CONFIG }),
+        body: JSON.stringify({ tracks: optimalOrder, config: DEFAULT_CONFIG }),
       })
 
       if (res.status === 401) {
@@ -398,27 +493,15 @@ export default function Home() {
   const libraryBadge = (() => {
     const base = `${filteredTracks.length} faixa${filteredTracks.length !== 1 ? 's' : ''}`
     if (queueStats && (queueStats.processing > 0 || queueStats.pending > 0)) {
-      const total = queueStats.total
-      const done = queueStats.done
-      return `${base} · ⟳ ${done}/${total}`
+      return `${base} · ⟳ ${queueStats.done}/${queueStats.total}`
     }
     return base
   })()
 
   if (status === 'loading') {
     return (
-      <div style={{
-        minHeight: '100vh',
-        background: 'var(--bg)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}>
-        <p style={{
-          color: 'var(--muted)',
-          fontFamily: 'var(--font-mono, monospace)',
-          fontSize: 13,
-        }}>
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p style={{ color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', fontSize: 13 }}>
           ⟳ verificando sessão...
         </p>
       </div>
@@ -437,9 +520,7 @@ export default function Home() {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
-              <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
-                ● logado
-              </span>
+              <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>● logado</span>
               <button
                 onClick={async () => {
                   const { signOut } = await import('next-auth/react')
@@ -455,55 +536,20 @@ export default function Home() {
                   fontFamily: 'var(--font-mono, monospace)',
                   cursor: 'pointer',
                 }}
-              >
-                sair
-              </button>
+              >sair</button>
             </>
           ) : (
-            <a
-              href="/login"
-              style={{
-                background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
-                border: 'none',
-                borderRadius: 8,
-                color: '#fff',
-                padding: '8px 18px',
-                fontSize: 13,
-                fontWeight: 600,
-                fontFamily: 'inherit',
-                cursor: 'pointer',
-                textDecoration: 'none',
-              }}
-            >
-              entrar
-            </a>
+            <a href="/login" style={{
+              background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+              border: 'none', borderRadius: 8, color: '#fff', padding: '8px 18px',
+              fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none',
+            }}>entrar</a>
           )}
         </div>
       </header>
 
-      {/* 🎯 LAYOUT PRINCIPAL: sidebar + conteúdo */}
-      <div style={{
-        maxWidth: 1200,
-        margin: '0 auto',
-        padding: '28px 20px',
-        display: 'flex',
-        gap: 24,
-        alignItems: 'flex-start',
-      }}>
-
-        {/* 📁 SIDEBAR (pastas) */}
-        <aside style={{
-          width: 220,
-          flexShrink: 0,
-          position: 'sticky',
-          top: 20,
-          maxHeight: 'calc(100vh - 100px)',
-          overflowY: 'auto',
-          padding: '16px',
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 16,
-        }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 20px', display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+        <aside style={{ width: 220, flexShrink: 0, position: 'sticky', top: 20, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto', padding: '16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16 }}>
           <FolderList
             folders={folders}
             selectedFolderId={selectedFolderId}
@@ -513,12 +559,12 @@ export default function Home() {
             onCreate={createFolder}
             onDelete={deleteFolder}
             onRename={renameFolder}
+            onDropTrack={moveTrackToFolder}
+            draggingTrackId={draggingTrackId}
           />
         </aside>
 
-        {/* 📚 CONTEÚDO PRINCIPAL */}
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
-
           <Panel title="biblioteca de músicas" badge={libraryBadge}>
             <TrackUpload
               onAddTrack={addTrack}
@@ -541,53 +587,72 @@ export default function Home() {
             {filteredTracks.length > 0 && (
               <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
                 <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
-                  faixas {selectedFolderId === 'all' ? 'na biblioteca' : 'nesta pasta'}
+                  {selectedFolderId === 'all'
+                    ? 'faixas na biblioteca (repositório de uploads — arraste pra uma pasta)'
+                    : selectedFolderId === null
+                      ? 'faixas sem pasta'
+                      : `faixas nesta pasta · ${folderName}`}
                 </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {filteredTracks.map(t => (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
-                      <div style={{ flex: 1, fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        <strong>{t.title}</strong> {t.artist && `— ${t.artist}`}
-                      </div>
-                      <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', flexShrink: 0 }}>
-                        {t.bpm > 0 ? `${t.bpm} BPM` : ''}
-                        {t.key && t.key !== 'desconhecido' ? ` · ${t.key}` : ''}
-                      </span>
-                      {analyses[t.id] && (
-                        <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--font-mono, monospace)', flexShrink: 0 }}>
-                          ✓ estrutura
-                        </span>
-                      )}
-                      <button onClick={() => removeTrack(t.id)} style={{ border: 'none', background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, flexShrink: 0 }}>×</button>
-                    </div>
-                  ))}
-                </div>
+                <TrackList
+                  tracks={filteredTracks}
+                  folders={folders}
+                  analyses={analyses}
+                  onRemove={removeTrack}
+                  onMoveToFolder={moveTrackToFolder}
+                  onDragStart={setDraggingTrackId}
+                  onDragEnd={() => setDraggingTrackId(null)}
+                  onClearAnalysis={clearAnalysis}
+                  showAnalysis={selectedFolderId !== 'all'}
+                />
               </div>
             )}
 
+            {/* 🆕 Bloco do botão "montar setlist" — só dentro de pasta real */}
             <div style={{ marginTop: 20 }}>
-              <button
-                onClick={generate}
-                disabled={filteredTracks.length < 3 || loading}
-                style={{
-                  ...btnStyle('primary'),
-                  width: '100%',
-                  justifyContent: 'center',
-                  opacity: filteredTracks.length < 3 ? 0.5 : 1,
-                  cursor: filteredTracks.length < 3 ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {loading ? '⟳ montando...' : '✦ montar setlist'}
-              </button>
-              {filteredTracks.length < 3 && (
-                <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
-                  adicione pelo menos 3 faixas para montar
-                </p>
+              {canGenerateSetlist ? (
+                <>
+                  <button
+                    onClick={generate}
+                    disabled={filteredTracks.length < 3 || loading}
+                    style={{
+                      ...btnStyle('primary'),
+                      width: '100%',
+                      justifyContent: 'center',
+                      opacity: filteredTracks.length < 3 ? 0.5 : 1,
+                      cursor: filteredTracks.length < 3 ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {loading ? '⟳ montando...' : `✦ montar setlist · ${folderName}`}
+                  </button>
+                  {filteredTracks.length < 3 && (
+                    <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
+                      adicione pelo menos 3 faixas nesta pasta para montar
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div style={{
+                  padding: '16px 20px',
+                  background: 'var(--surface2)',
+                  border: '1px dashed var(--border)',
+                  borderRadius: 10,
+                  textAlign: 'center',
+                }}>
+                  <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 6, fontFamily: 'var(--font-mono, monospace)' }}>
+                    💡 selecione uma pasta para montar o setlist
+                  </p>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                    "todas as faixas" é só o <strong>repositório de uploads</strong>.<br />
+                    Crie uma pasta (ex: <em>festa</em>), arraste as faixas pra lá,<br />
+                    e monte o setlist <strong>dentro dela</strong>.
+                  </p>
+                </div>
               )}
             </div>
           </Panel>
 
-          {(loading || setlist) && (
+          {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
+          {canGenerateSetlist && (loading || setlist) && (
             <Panel title="set list gerado" badge={setlist ? '● gerado com IA' : undefined}>
               {loading && (
                 <div style={{ textAlign: 'center', padding: 48 }}>
@@ -606,7 +671,6 @@ export default function Home() {
               )}
             </Panel>
           )}
-
         </main>
       </div>
     </div>

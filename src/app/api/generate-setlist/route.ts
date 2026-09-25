@@ -10,11 +10,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 
-const TIMEOUT_MS = 300_000  // 5 min — margem para modelos free lentos
+const TIMEOUT_MS = 300_000  // 5 min
 
-// ⚠️ MODELO ATUAL: grátis (pode dar 429/503, sujeito a pool compartilhado)
+// ⚠️ MODELO ATUAL: grátis (expira 25/set/2026)
 // 🔜 QUANDO TIVER CRÉDITO WISE: trocar por 'openai/gpt-4o-mini' (pago, estável)
-const MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
+const MODEL = 'nex-agi/nex-n2.5-mini:free'
 
 interface GenerateRequest {
   tracks: Track[]
@@ -41,7 +41,6 @@ function findOriginalTrack(setlistTrack: any, tracks: Track[]): Track | undefine
   const aiTitle = normalizeTitle(setlistTrack.title)
   const aiBpm = Number(setlistTrack.bpm)
 
-  // 1. Match exato + BPM próximo (±2)
   let original = tracks.find(
     (t) =>
       normalizeTitle(t.title) === aiTitle &&
@@ -49,23 +48,19 @@ function findOriginalTrack(setlistTrack: any, tracks: Track[]): Track | undefine
   )
   if (original) return original
 
-  // 2. Match exato de título (ignora BPM)
   original = tracks.find((t) => normalizeTitle(t.title) === aiTitle)
   if (original) return original
 
-  // 3. Remove sufixos comuns
   const aiClean = cleanTitle(aiTitle)
   original = tracks.find((t) => cleanTitle(t.title) === aiClean)
   if (original) return original
 
-  // 4. Match por includes
   original = tracks.find((t) => {
     const tClean = cleanTitle(t.title)
     return tClean.includes(aiClean) || aiClean.includes(tClean)
   })
   if (original) return original
 
-  // 5. BPM + energia (último recurso)
   original = tracks.find(
     (t) =>
       Math.abs((t.bpm || 0) - aiBpm) <= 1 &&
@@ -92,73 +87,75 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // 🆕 VALIDAÇÃO DE PASTA: todas as faixas devem ter o MESMO folderId (não-nulo)
+    const folderIds = new Set(tracks.map(t => t.folderId ?? null))
+    if (folderIds.size > 1) {
+      return NextResponse.json(
+        { error: 'Todas as faixas do setlist devem ser da mesma pasta.' },
+        { status: 400 }
+      )
+    }
+
+    const onlyFolderId = tracks[0].folderId
+    if (!onlyFolderId) {
+      return NextResponse.json(
+        { error: 'Não é possível montar setlist com faixas sem pasta. Crie uma pasta e arraste as faixas pra lá.' },
+        { status: 400 }
+      )
+    }
+
     const orderedList = tracks
       .map((t, i) => `${i + 1}. "${t.title}" — ${t.artist} (BPM: ${t.bpm || '?'}, Tom: ${t.key || '?'}, Energia: ${t.energy}/10)`)
       .join('\n')
 
-    const systemPrompt = `Você é um DJ profissional e curador musical com décadas de experiência.
-Sua tarefa é CRIAR UMA ANÁLISE e NOTAS DE TRANSIÇÃO para um setlist
-que JÁ FOI PRÉ-ORDENADO por um algoritmo de compatibilidade harmônica.
+    const systemPrompt = `Você é um DJ profissional. O setlist abaixo JÁ FOI PRÉ-ORDENADO por um algoritmo (BPM + Camelot + estrutura). MANTENHA a ordem.
 
-⚠️ REGRA CRÍTICA — NÃO IGNORE:
-A ordem das faixas abaixo FOI CALCULADA por um algoritmo que analisou
-BPM + Camelot + estrutura de cada faixa. Esta ordem é o ponto de partida
-e você DEVE RESPEITÁ-LA.
+Se mudar a ordem, justifique na "analysis". NÃO descarte faixas.
 
-Se você identificar uma ordem MELHOR, você PODE reordenar — MAS APENAS se:
-- A mudança melhorar o score médio de compatibilidade
-- Você EXPLICAR na "analysis" por que a ordem original não era ideal
+Regras de mixagem:
+- BPM consecutivo: diferença ≤ ±3 (ideal) ou ±6 (aceitável)
+- Camelot: mesmo código, adjacente mesma letra, ou mesmo número
+- Energia: respeite a curva pedida
 
-NÃO reordene por preferência subjetiva. NÃO invente ordem aleatória.
-NÃO descarte faixas.
-
-Regras técnicas que você DEVE respeitar:
-- BPM: diferença entre faixas consecutivas ≤ ±3 BPM (ideal) ou ±6 (aceitável)
-- Tom (Camelot): priorize mesmo código, adjacentes mesma letra, ou mesmo número
-- Energia: respeite a curva solicitada
-
-Retorne APENAS um JSON válido no formato:
+Retorne APENAS JSON válido:
 {
   "setlist": [
     {
       "position": 1,
-      "title": "Nome EXATO da música (copie da lista)",
+      "title": "Nome EXATO (copie)",
       "artist": "Artista",
       "bpm": 128,
       "key": "8A",
       "energy": 7,
-      "transitionNote": "Nota prática sobre como mixar para a próxima faixa (ex: 'solte no breakdown, crossfade de 16 barras, corta o kick aos 4:30')"
+      "transitionNote": "1 frase curta e prática (máx 120 chars)"
     }
   ],
-  "analysis": "Análise geral do setlist em 2-3 frases, explicando as escolhas harmônicas e se você manteve ou alterou a ordem pré-calculada (e por quê)",
-  "djTip": "Dica prática de DJ: efeito, EQ, técnica de mixagem para este set específico",
-  "peakMoment": "Descrição do momento de pico do set (qual faixa, qual minuto aproximado)"
-}`
+  "analysis": "2-3 frases sobre a ordem",
+  "djTip": "1 dica prática (máx 200 chars)",
+  "peakMoment": "1 frase sobre o pico do set (máx 200 chars)"
+}
 
-    const userPrompt = `Contexto do set:
-- Tipo de evento: ${config.eventType}
+⚠️ SEJA CONCISO. transitionNote com UMA frase. Nada de introdução, nada de markdown, só o JSON.`
+
+    const userPrompt = `Contexto:
+- Evento: ${config.eventType}
 - Duração: ${config.duration}
-- Curva de energia: ${config.energyCurve}
+- Curva: ${config.energyCurve}
 - Público: ${config.audience || 'Não especificado'}
 
-⚠️ ORDEM PRÉ-CALCULADA PELO ALGORITMO (mantenha esta ordem, salvo se tiver motivo forte):
+ORDEM PRÉ-CALCULADA (mantenha):
 
 ${orderedList}
 
 Total: ${tracks.length} faixas.
 
-Sua tarefa:
-1. Confirme a ordem acima (ou justifique uma alteração se necessário)
-2. Para cada transição, escreva uma "transitionNote" prática de DJ
-3. Escreva a "analysis" geral (mencionando se manteve a ordem)
-4. Escreva o "djTip" e o "peakMoment"
-
-Retorne APENAS o JSON no formato especificado.`
+Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peakMoment.`
 
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
     console.log(`[OpenRouter] Iniciando geração com modelo: ${MODEL}`)
+    console.log(`[OpenRouter] Pasta: ${onlyFolderId} · ${tracks.length} faixas`)
     const startTime = Date.now()
 
     let completion
@@ -170,8 +167,8 @@ Retorne APENAS o JSON no formato especificado.`
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          temperature: 0.5,
-          max_tokens: 8192,
+          temperature: 0.3,
+          max_tokens: 16000,
         } as any,
         { signal: controller.signal }
       )
@@ -186,7 +183,6 @@ Retorne APENAS o JSON no formato especificado.`
         )
       }
 
-      // 429 vira 503 (retry) em vez de 500 (erro fatal)
       if (errStatus === 429) {
         return NextResponse.json(
           { error: 'Modelo temporariamente sobrecarregado. Aguarde 30s e tente de novo.' },
@@ -215,6 +211,7 @@ Retorne APENAS o JSON no formato especificado.`
     console.log(`[OpenRouter] Tempo: ${elapsed}s`)
     console.log(`[OpenRouter] Finish reason: ${finishReason}`)
     console.log(`[OpenRouter] Tamanho da resposta: ${responseText?.length ?? 0} chars`)
+    console.log(`[OpenRouter] Usage:`, completion.usage)
 
     if (!responseText) {
       console.error('[OpenRouter] Resposta vazia. Detalhes:', {
@@ -306,9 +303,11 @@ Retorne APENAS o JSON no formato especificado.`
         peakMoment: parsed.peakMoment || null,
         totalDuration: parsed.setlist?.length?.toString() || '0',
         userId: session.user.id,
+        folderId: onlyFolderId,  // 🆕
         tracks: {
           create: parsed.setlist.map((t: any, i: number) => ({
             position: i + 1,
+            trackId: t.id,  // 🆕 ID original (upload-xxx)
             title: t.title,
             artist: t.artist,
             bpm: t.bpm,
@@ -327,6 +326,7 @@ Retorne APENAS o JSON no formato especificado.`
       peakMoment: parsed.peakMoment || '',
       totalDuration: parsed.setlist?.length?.toString() || '0',
       id: setlist.id,
+      folderId: onlyFolderId,
     })
   } catch (error) {
     console.error('Generate setlist error:', error)
