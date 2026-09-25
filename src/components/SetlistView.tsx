@@ -1,13 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { GeneratedSetlist } from '@/lib/types'
 import {
   MixTimeline,
   AudioAnalysis,
   AudioSegment,
   formatSeconds,
-  calculateMixTimeline,
+  calculateFullTimeline,
 } from '@/lib/mix-timeline'
 import CompatibilityMatrix from './CompatibilityMatrix'
 
@@ -28,9 +28,26 @@ export default function SetlistView({
 
   const hasTimelineData = analyses && durations
 
+  // 🆕 Cadeia completa com offsets (useMemo pra não recalcular)
+  const transitions = useMemo(() => {
+    if (!analyses || !durations) return []
+
+    const items = setlist.setlist.map(t => ({
+      track: t as any,
+      analysis: analyses[t.id],
+      duration: durations[t.id] ?? 0,
+    }))
+
+    // Verifica se TODAS as faixas têm análise
+    const allHaveAnalysis = items.every(i => i.analysis)
+    if (!allHaveAnalysis) return []
+
+    return calculateFullTimeline(items)
+  }, [setlist, analyses, durations])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* 🔝 ALERTA DE COMPATIBILIDADE */}
+      {/* ALERTA DE COMPATIBILIDADE */}
       {analyses && durations && (
         <CompatibilityAlert
           setlist={setlist}
@@ -39,7 +56,7 @@ export default function SetlistView({
         />
       )}
 
-      {/* 📊 ANÁLISE GERAL DO SET */}
+      {/* ANÁLISE GERAL DO SET */}
       {setlist.analysis && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -66,7 +83,7 @@ export default function SetlistView({
         </div>
       )}
 
-      {/* 🎵 MATRIZ DE COMPATIBILIDADE */}
+      {/* MATRIZ DE COMPATIBILIDADE */}
       {analyses && durations && setlist.setlist.length >= 2 && (
         <CompatibilityMatrix tracks={setlist.setlist} />
       )}
@@ -87,30 +104,23 @@ export default function SetlistView({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {setlist.setlist.map((track, i) => {
             const isLast = i === setlist.setlist.length - 1
-            const nextTrack = !isLast ? setlist.setlist[i + 1] : null
+            const transition = transitions[i]   // 🆕
+            const nextTransitionStart = transitions[i + 1]?.startOffsetA
 
             return (
               <div key={track.id || i}>
-                <TrackRow track={track} index={i} />
+                {/* Cabeçalho da faixa com tempo de entrada no set */}
+                <TrackRow
+                  track={track}
+                  index={i}
+                  entryOffset={transition?.startOffsetA}
+                />
 
-                {nextTrack && (
+                {!isLast && transition && (
                   <TransitionRow
                     from={track}
-                    to={nextTrack}
-                    timeline={
-                      hasTimelineData &&
-                      analyses?.[track.id] &&
-                      analyses?.[nextTrack.id] &&
-                      durations?.[track.id]
-                        ? calculateMixTimeline(
-                            track,
-                            nextTrack,
-                            analyses[track.id],
-                            analyses[nextTrack.id],
-                            durations[track.id]
-                          )
-                        : null
-                    }
+                    to={setlist.setlist[i + 1]}
+                    timeline={transition.timeline}
                     analysisA={analyses?.[track.id] ?? null}
                     durationA={durations?.[track.id] ?? 0}
                     isExpanded={expandedTransition === i}
@@ -119,13 +129,39 @@ export default function SetlistView({
                     }
                   />
                 )}
+
+                {/* Se não tem transição calculada (faltou análise), mostra placeholder */}
+                {!isLast && !transition && (
+                  <div style={{
+                    padding: '8px 16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    marginLeft: 16,
+                  }}>
+                    <div style={{
+                      width: 2,
+                      height: 24,
+                      background: 'var(--border)',
+                      borderRadius: 1,
+                    }} />
+                    <p style={{
+                      fontSize: 11,
+                      color: 'var(--muted)',
+                      fontFamily: 'var(--font-mono, monospace)',
+                      fontStyle: 'italic',
+                    }}>
+                      análise de mixagem disponível após upload
+                    </p>
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
       </div>
 
-      {/* 💡 DJ TIP */}
+      {/* DJ TIP */}
       {setlist.djTip && (
         <div style={{
           padding: '16px 18px',
@@ -155,7 +191,7 @@ export default function SetlistView({
         </div>
       )}
 
-      {/* 🔥 PEAK MOMENT */}
+      {/* PEAK MOMENT */}
       {setlist.peakMoment && (
         <div style={{
           padding: '16px 18px',
@@ -185,7 +221,7 @@ export default function SetlistView({
         </div>
       )}
 
-      {/* 🔄 REGENERAR */}
+      {/* REGENERAR */}
       {onRegenerate && (
         <button
           onClick={onRegenerate}
@@ -212,7 +248,19 @@ export default function SetlistView({
   )
 }
 
-function TrackRow({ track, index }: { track: any; index: number }) {
+// ============================================================
+// TrackRow (com tempo de entrada no set)
+// ============================================================
+
+function TrackRow({
+  track,
+  index,
+  entryOffset,
+}: {
+  track: any
+  index: number
+  entryOffset?: number
+}) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
     : track.energy >= 6 ? 'var(--yellow)'
       : 'var(--green)'
@@ -268,6 +316,21 @@ function TrackRow({ track, index }: { track: any; index: number }) {
         </p>
       </div>
 
+      {/* 🆕 Tempo de entrada no set */}
+      {entryOffset !== undefined && entryOffset > 0 && (
+        <span style={{
+          fontSize: 11,
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono, monospace)',
+          padding: '2px 8px',
+          background: 'rgba(124, 92, 252, 0.15)',
+          borderRadius: 4,
+          flexShrink: 0,
+        }}>
+          entra aos {formatSeconds(entryOffset)}
+        </span>
+      )}
+
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
         {track.bpm > 0 && (
           <span style={{
@@ -307,6 +370,10 @@ function TrackRow({ track, index }: { track: any; index: number }) {
     </div>
   )
 }
+
+// ============================================================
+// SEGMENT STYLES + StructureBar
+// ============================================================
 
 const SEGMENT_STYLES: Record<string, { color: string; bg: string; label: string; icon: string }> = {
   intro:     { color: '#5c9cfc', bg: 'rgba(92, 156, 252, 0.35)',  label: 'intro',     icon: '↓' },
@@ -466,6 +533,10 @@ function StructureBar({
   )
 }
 
+// ============================================================
+// TransitionRow (com tempos globais)
+// ============================================================
+
 function TransitionRow({
   from,
   to,
@@ -477,39 +548,12 @@ function TransitionRow({
 }: {
   from: any
   to: any
-  timeline: MixTimeline | null
+  timeline: MixTimeline
   analysisA: AudioAnalysis | null
   durationA: number
   isExpanded: boolean
   onToggle: () => void
 }) {
-  if (!timeline) {
-    return (
-      <div style={{
-        padding: '8px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        marginLeft: 16,
-      }}>
-        <div style={{
-          width: 2,
-          height: 24,
-          background: 'var(--border)',
-          borderRadius: 1,
-        }} />
-        <p style={{
-          fontSize: 11,
-          color: 'var(--muted)',
-          fontFamily: 'var(--font-mono, monospace)',
-          fontStyle: 'italic',
-        }}>
-          análise de mixagem disponível após upload
-        </p>
-      </div>
-    )
-  }
-
   const confidenceColor = timeline.confidence === 'high' ? 'var(--green)'
     : timeline.confidence === 'medium' ? 'var(--yellow)'
       : 'var(--red)'
@@ -572,6 +616,17 @@ function TransitionRow({
               {timeline.crossfadeBars} barras · {formatSeconds(timeline.crossfadeDurationSec)}
             </span>
 
+            {/* 🆕 Tempo global */}
+            {timeline.crossfadeStartGlobalFormatted && (
+              <span style={{
+                fontSize: 11,
+                color: 'var(--accent)',
+                fontFamily: 'var(--font-mono, monospace)',
+              }}>
+                📍 {timeline.crossfadeStartGlobalFormatted} do set
+              </span>
+            )}
+
             <span style={{
               fontSize: 11,
               color: 'var(--muted)',
@@ -597,7 +652,7 @@ function TransitionRow({
 
               <TimelineVisual timeline={timeline} />
 
-              {/* 🎯 INSTRUÇÕES PARA O DJ — 4 passos */}
+              {/* INSTRUÇÕES PARA O DJ */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
                 {/* 1. Play na próxima faixa */}
                 <Instruction
@@ -607,13 +662,14 @@ function TransitionRow({
                   value={`aos ${timeline.playBAtFormatted} da "${to.title}"`}
                   hint={
                     timeline.introEndBSec > 0
-    ? `A sai na barra #${Math.round(timeline.crossfadeEndBarNumber ?? 0)}` +
-      (timeline.crossfadeEndOffset && timeline.crossfadeEndOffset > 0.05
-        ? ` (⚠️ +${timeline.crossfadeEndOffset.toFixed(2)}s do grid)`
-        : ` ✓`) +
-      ` · beat principal da B entra em ${timeline.introEndBFormatted}`
-    : 'a faixa começa direto com o beat (sem intro)'
-}
+                      ? `A sai na barra #${Math.round(timeline.crossfadeEndBarNumber ?? 0)}` +
+                        (timeline.crossfadeEndOffset && timeline.crossfadeEndOffset > 0.05
+                          ? ` (⚠️ +${timeline.crossfadeEndOffset.toFixed(2)}s do grid)`
+                          : ` ✓`) +
+                        ` · beat principal da B entra em ${timeline.introEndBFormatted}`
+                      : 'a faixa começa direto com o beat (sem intro)'
+                  }
+                  globalTime={timeline.playBAtGlobalFormatted}   // 🆕
                 />
 
                 {/* 2. Crossfade */}
@@ -623,6 +679,7 @@ function TransitionRow({
                   label="Inicie o crossfade"
                   value={`aos ${timeline.crossfadeStartFormatted} de "${from.title}"`}
                   hint={`${timeline.crossfadeBars} barras (${formatSeconds(timeline.crossfadeDurationSec)})`}
+                  globalTime={timeline.crossfadeStartGlobalFormatted}   // 🆕
                 />
 
                 {/* 3. Stop */}
@@ -632,6 +689,7 @@ function TransitionRow({
                   label="Desligue a faixa anterior"
                   value={`aos ${timeline.stopAFormatted}`}
                   hint={`aos ${timeline.stopAFormatted} de "${from.title}"`}
+                  globalTime={timeline.crossfadeEndGlobalFormatted}   // 🆕
                 />
               </div>
 
@@ -664,6 +722,10 @@ function TransitionRow({
     </div>
   )
 }
+
+// ============================================================
+// TimelineVisual
+// ============================================================
 
 function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   const totalDuration = Math.max(timeline.crossfadeEndSec + 30, 120)
@@ -742,18 +804,24 @@ function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   )
 }
 
+// ============================================================
+// Instruction (com globalTime)
+// ============================================================
+
 function Instruction({
   icon,
   color,
   label,
   value,
   hint,
+  globalTime,
 }: {
   icon: string
   color: string
   label: string
   value: string
   hint: string
+  globalTime?: string   // 🆕
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -768,7 +836,7 @@ function Instruction({
         {icon}
       </span>
       <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2, flexWrap: 'wrap' }}>
           <span style={{
             fontSize: 12,
             color: 'var(--muted)',
@@ -784,6 +852,20 @@ function Instruction({
           }}>
             {value}
           </span>
+          {/* 🆕 Tempo global */}
+          {globalTime && (
+            <span style={{
+              fontSize: 12,
+              color: 'var(--accent)',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontWeight: 700,
+              padding: '2px 8px',
+              background: 'rgba(124, 92, 252, 0.15)',
+              borderRadius: 4,
+            }}>
+              📍 {globalTime} do set
+            </span>
+          )}
         </div>
         <p style={{
           fontSize: 11,
@@ -796,6 +878,10 @@ function Instruction({
     </div>
   )
 }
+
+// ============================================================
+// CompatibilityAlert
+// ============================================================
 
 interface TransitionIssue {
   index: number
@@ -872,8 +958,6 @@ function analyzeTransitions(
 
     const bpmA = a.bpm || 0
     const bpmB = b.bpm || 0
-    const bpmForA = bpmA > 0 ? bpmA : bpmB
-    const bpmForB = bpmB > 0 ? bpmB : bpmA
 
     if (bpmA > 0 && bpmB > 0) {
       const bpmDiff = Math.abs(bpmA - bpmB)
@@ -881,7 +965,7 @@ function analyzeTransitions(
         worstSeverity = 'critical'
         reasons.push(`BPM salta de ${bpmA} para ${bpmB} (+${bpmDiff})`)
       } else if (bpmDiff > 6) {
-       if ((worstSeverity as string) !== 'critical') worstSeverity = 'warning'
+worstSeverity = String(worstSeverity) === 'critical' ? 'critical' : 'warning'
         reasons.push(`BPM varia ${bpmA} → ${bpmB} (+${bpmDiff})`)
       }
     }
@@ -891,46 +975,8 @@ function analyzeTransitions(
       worstSeverity = 'critical'
       reasons.push(`Camelot ${a.key} → ${b.key} (distante)`)
     } else if (camelot === 'humor') {
-      worstSeverity = worstSeverity === 'critical' ? 'critical' : 'warning'
+worstSeverity = String(worstSeverity) === 'critical' ? 'critical' : 'warning'
       reasons.push(`Camelot ${a.key} → ${b.key} (muda o humor)`)
-    }
-
-    const analysisB = analyses[b.id]
-    if (analysisB?.segments && bpmForB > 0) {
-      const introSegs = analysisB.segments.filter(s => s.label.toLowerCase() === 'intro')
-      if (introSegs.length > 0) {
-        const totalIntroSec = introSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
-        const barDuration = (60 / bpmForB) * 4
-        const introBars = totalIntroSec / barDuration
-        if (introBars < 4) {
-          if (worstSeverity !== 'critical') worstSeverity = 'warning'
-          reasons.push(`intro da faixa B é muito curto (~${Math.round(introBars)} barras)`)
-        }
-      }
-    }
-
-    const analysisA = analyses[a.id]
-    const durA = durations[a.id] || 0
-    if (analysisA?.segments && durA > 0 && bpmForA > 0) {
-      const outroSegs = analysisA.segments.filter(s => s.label.toLowerCase() === 'outro')
-      if (outroSegs.length > 0) {
-        const totalOutroSec = outroSegs.reduce((acc, s) => acc + (s.end - s.start), 0)
-        const barDuration = (60 / bpmForA) * 4
-        const outroBars = totalOutroSec / barDuration
-        if (outroBars < 4) {
-          if (worstSeverity !== 'critical') worstSeverity = 'warning'
-          reasons.push(`outro da faixa A é muito curto (~${Math.round(outroBars)} barras)`)
-        }
-      } else {
-        const hasFallback = analysisA.segments.some(s => {
-          const label = s.label.toLowerCase()
-          return ['outro', 'breakdown', 'drop', 'chorus', 'verse'].includes(label)
-        })
-        if (!hasFallback) {
-          if (worstSeverity !== 'critical') worstSeverity = 'warning'
-          reasons.push('faixa A sem ponto de saída claro (sem outro/breakdown/drop/chorus)')
-        }
-      }
     }
 
     if (worstSeverity === 'ok') {

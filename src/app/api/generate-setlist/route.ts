@@ -1,20 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import OpenAI from 'openai'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { Track, SetConfig } from '@/lib/types'
 
-const openai = new OpenAI({
-  baseURL: 'https://openrouter.ai/api/v1',
-  apiKey: process.env.OPENROUTER_API_KEY,
-})
-
 const TIMEOUT_MS = 300_000  // 5 min
-
-// ⚠️ MODELO ATUAL: grátis (expira 25/set/2026)
-// 🔜 QUANDO TIVER CRÉDITO WISE: trocar por 'openai/gpt-4o-mini' (pago, estável)
-const MODEL = 'nex-agi/nex-n2.5-mini:free'
+const MODEL = 'openai/gpt-4o-mini'
 
 interface GenerateRequest {
   tracks: Track[]
@@ -87,7 +78,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 🆕 VALIDAÇÃO DE PASTA: todas as faixas devem ter o MESMO folderId (não-nulo)
     const folderIds = new Set(tracks.map(t => t.folderId ?? null))
     if (folderIds.size > 1) {
       return NextResponse.json(
@@ -158,10 +148,18 @@ Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peak
     console.log(`[OpenRouter] Pasta: ${onlyFolderId} · ${tracks.length} faixas`)
     const startTime = Date.now()
 
-    let completion
+    let completion: any
     try {
-      completion = await openai.chat.completions.create(
-        {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://setforge.app',
+          'X-Title': 'SetForge',
+          'Accept-Encoding': 'identity',
+        },
+        body: JSON.stringify({
           model: MODEL,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -169,9 +167,33 @@ Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peak
           ],
           temperature: 0.3,
           max_tokens: 16000,
-        } as any,
-        { signal: controller.signal }
-      )
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errText = await response.text()
+        console.error(`[OpenRouter] HTTP ${response.status}:`, errText.slice(0, 500))
+        return NextResponse.json(
+          { error: `OpenRouter ${response.status}: ${errText.slice(0, 200)}` },
+          { status: response.status }
+        )
+      }
+
+      // LÊ COMO TEXTO E PARSEIA MANUALMENTE
+      const rawText = await response.text()
+      console.log(`[OpenRouter] Resposta crua (200 chars):`, rawText.slice(0, 200))
+
+      try {
+        completion = JSON.parse(rawText.trim())
+      } catch (parseErr) {
+        console.error('[OpenRouter] Falha ao parsear:', parseErr)
+        console.error('[OpenRouter] Texto:', rawText.slice(0, 500))
+        return NextResponse.json(
+          { error: `JSON inválido do OpenRouter: ${rawText.slice(0, 100)}` },
+          { status: 502 }
+        )
+      }
     } catch (err) {
       const errName = (err as any)?.name
       const errStatus = (err as any)?.status
@@ -182,14 +204,12 @@ Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peak
           { status: 504 }
         )
       }
-
       if (errStatus === 429) {
         return NextResponse.json(
           { error: 'Modelo temporariamente sobrecarregado. Aguarde 30s e tente de novo.' },
           { status: 503 }
         )
       }
-
       throw err
     } finally {
       clearTimeout(timeoutId)
@@ -265,7 +285,6 @@ Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peak
       )
     }
 
-    // 🔑 REINJEÇÃO DE IDs
     const tracksWithIds = parsed.setlist.map((setlistTrack: any) => {
       const original = findOriginalTrack(setlistTrack, tracks)
 
@@ -303,11 +322,11 @@ Gere o JSON: análise geral + transitionNote CURTA pra cada faixa + djTip + peak
         peakMoment: parsed.peakMoment || null,
         totalDuration: parsed.setlist?.length?.toString() || '0',
         userId: session.user.id,
-        folderId: onlyFolderId,  // 🆕
+        folderId: onlyFolderId,
         tracks: {
           create: parsed.setlist.map((t: any, i: number) => ({
             position: i + 1,
-            trackId: t.id,  // 🆕 ID original (upload-xxx)
+            trackId: t.id,
             title: t.title,
             artist: t.artist,
             bpm: t.bpm,
