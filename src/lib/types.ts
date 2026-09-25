@@ -8,7 +8,8 @@ export interface Track {
   energy: number       // 1–10
   genre?: string
   danceability?: number // 0–1 (Spotify)
-  source?: 'spotify' | 'soundcloud' | 'youtube' | 'manual' | 'upload'
+  source?: 'spotify' | 'soundcloud' | 'youtube' | 'manual' | 'upload' | 'beatport'
+  firstBeatSec?: number   // 🆕 offset do primeiro beat (segundos)
   spotifyId?: string
   previewUrl?: string
   artworkUrl?: string

@@ -102,6 +102,7 @@ export async function POST(req: NextRequest) {
             key: key ?? '',
             energy: energy ?? 7,
             durationSec: durationSec ?? 0,
+            firstBeatSec: body.firstBeatSec ?? 0,
             folderId: folderId ?? null,
             segments: segments ?? undefined,
             fileHash: fileHash ?? null,
@@ -157,6 +158,7 @@ export async function PATCH(req: NextRequest) {
         key: updates.key ?? '',
         energy: updates.energy ?? 7,
         durationSec: updates.durationSec ?? 0,
+        firstBeatSec: updates.firstBeatSec ?? 0,   // 🆕
         segments: updates.segments ?? undefined,
       },
     })

@@ -607,9 +607,13 @@ function TransitionRow({
                   value={`aos ${timeline.playBAtFormatted} da "${to.title}"`}
                   hint={
                     timeline.introEndBSec > 0
-                      ? `o beat principal entra em ${timeline.introEndBFormatted}, alinhado com o crossfade`
-                      : 'a faixa começa direto com o beat (sem intro)'
-                  }
+    ? `A sai na barra #${Math.round(timeline.crossfadeEndBarNumber ?? 0)}` +
+      (timeline.crossfadeEndOffset && timeline.crossfadeEndOffset > 0.05
+        ? ` (⚠️ +${timeline.crossfadeEndOffset.toFixed(2)}s do grid)`
+        : ` ✓`) +
+      ` · beat principal da B entra em ${timeline.introEndBFormatted}`
+    : 'a faixa começa direto com o beat (sem intro)'
+}
                 />
 
                 {/* 2. Crossfade */}
@@ -877,7 +881,7 @@ function analyzeTransitions(
         worstSeverity = 'critical'
         reasons.push(`BPM salta de ${bpmA} para ${bpmB} (+${bpmDiff})`)
       } else if (bpmDiff > 6) {
-        if (worstSeverity !== 'critical') worstSeverity = 'warning'
+       if ((worstSeverity as string) !== 'critical') worstSeverity = 'warning'
         reasons.push(`BPM varia ${bpmA} → ${bpmB} (+${bpmDiff})`)
       }
     }
@@ -887,7 +891,7 @@ function analyzeTransitions(
       worstSeverity = 'critical'
       reasons.push(`Camelot ${a.key} → ${b.key} (distante)`)
     } else if (camelot === 'humor') {
-      if (worstSeverity !== 'critical') worstSeverity = 'warning'
+      worstSeverity = worstSeverity === 'critical' ? 'critical' : 'warning'
       reasons.push(`Camelot ${a.key} → ${b.key} (muda o humor)`)
     }
 

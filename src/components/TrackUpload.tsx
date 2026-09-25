@@ -69,6 +69,7 @@ export default function TrackUpload({
     setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'analyzing-bpm' } : q))
 
     let detectedBpm: number | null = null
+    let firstBeatSec = 0   // 
     let durationSec = 0
     let bpmLocalFailed = false
 
@@ -91,11 +92,12 @@ export default function TrackUpload({
       }
 
       const mt = new MusicTempo(audioData, {
-        minBeatInterval: 60 / 160,
-        maxBeatInterval: 60 / 90,
-      })
-      detectedBpm = Math.round(mt.tempo)
-      await audioContext.close()
+  minBeatInterval: 60 / 160,
+  maxBeatInterval: 60 / 90,
+})
+detectedBpm = Math.round(mt.tempo)
+firstBeatSec = mt.beats?.[0] ?? 0   // 🆕 primeiro beat em segundos
+await audioContext.close()
     } catch (error) {
       console.warn(`[TrackUpload] BPM local falhou para "${item.file.name}". Vai seguir pro Python.`, error)
       bpmLocalFailed = true
@@ -114,6 +116,7 @@ export default function TrackUpload({
       key: '',
       energy: 7,
       source: 'manual',
+      firstBeatSec,   //
     }
 
     if (libraryTracks.length > 0 && detectedBpm) {

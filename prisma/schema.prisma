@@ -42,6 +42,7 @@ model Track {
   key          String   @default("")
   energy       Int      @default(7)
   durationSec  Float    @default(0)
+  firstBeatSec  Float    @default(0)   // 🆕
   segments     Json?
   fileHash     String?
   createdAt    DateTime @default(now())

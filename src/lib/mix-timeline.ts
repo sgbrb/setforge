@@ -23,6 +23,9 @@ export interface MixTimeline {
   playAtSec: number
   crossfadeStartSec: number
   crossfadeEndSec: number
+  crossfadeStartBarNumber?: number
+  crossfadeEndBarNumber?: number
+  crossfadeEndOffset?: number
   stopASec: number
 
   // Instruções sobre a Faixa B (em segundos da Faixa B)
@@ -48,12 +51,23 @@ export interface MixTimeline {
  * Converte segundos para o formato "M:SS".
  */
 export function formatSeconds(sec: number): string {
-  const total = Math.round(sec)
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+  if (!isFinite(sec) || sec < 0) return '0:00'
+  const mins = Math.floor(sec / 60)
+  const secs = Math.floor(sec % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+/**
+ * 🆕 Formata segundos com 1 casa decimal.
+ * Ex: 157.23 → "2:37.2"
+ */
+export function formatSecondsWithDecimal(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return '0:00.0'
+  const mins = Math.floor(sec / 60)
+  const secs = Math.floor(sec % 60)
+  const dec = Math.round((sec - Math.floor(sec)) * 10)
+  return `${mins}:${secs.toString().padStart(2, '0')}.${dec}`
+}
 /**
  * Calcula quantos segundos vale uma barra no BPM dado.
  */
@@ -203,8 +217,21 @@ export function calculateMixTimeline(
 
   const crossfadeDuration = barDuration * crossfadeBars
 
-  // 5. Crossfade termina quando a faixa A for desligada
-  const crossfadeEnd = outroTime
+    // 5. Crossfade termina quando a faixa A for desligada
+  // 🆕 Snap do ponto de saída da A pra barra cheia (frase de 8)
+  const snappedOutro = snapToBar(
+    outroTime,
+    bpm,
+    trackA.firstBeatSec ?? 0,
+    8
+  )
+  const crossfadeEnd = snappedOutro.snappedSec
+
+  if (snappedOutro.offsetFromGrid > 0.05) {
+    notes.push(
+      `Ponto de saída da A ajustado ao grid (offset original +${snappedOutro.offsetFromGrid.toFixed(2)}s)`
+    )
+  }
 
   // 6. Crossfade começa = fim - duração
   const crossfadeStart = Math.max(0, crossfadeEnd - crossfadeDuration)
@@ -241,8 +268,12 @@ export function calculateMixTimeline(
     crossfadeEndSec: crossfadeEnd,
     stopASec: crossfadeEnd,
 
+    crossfadeStartBarNumber: barNumberAt(crossfadeStart, bpm, trackA.firstBeatSec ?? 0),  // 🆕
+    crossfadeEndBarNumber: snappedOutro.barNumber,                                          // 🆕
+    crossfadeEndOffset: snappedOutro.offsetFromGrid, 
+
     playBAtSec,
-    playBAtFormatted: formatSeconds(playBAtSec),
+    playBAtFormatted: formatSecondsWithDecimal(playBAtSec),
     introEndBSec: introB.time,
     introEndBFormatted: formatSeconds(introB.time),
 
@@ -275,4 +306,59 @@ export function calculateFullTimeline(
     })
   }
   return transitions
+}
+// ============================================================
+// 🆕 SNAP TO BAR — utilidades de grid musical
+// ============================================================
+
+/**
+ * Retorna o número da barra (fracionário) pra um segundo.
+ * Ex: 87.0 = início da barra 87. 87.5 = meio da barra 87.
+ */
+export function barNumberAt(sec: number, bpm: number, firstBeatSec: number): number {
+  if (bpm <= 0) return 0
+  const beatDuration = 60 / bpm
+  const barDuration = beatDuration * 4
+  return (sec - firstBeatSec) / barDuration
+}
+
+/**
+ * Retorna o offset (0-1) dentro da barra atual.
+ * 0 = exato no início. 0.5 = meio. 0.99 = quase fim.
+ */
+export function offsetFromGrid(sec: number, bpm: number, firstBeatSec: number): number {
+  const bar = barNumberAt(sec, bpm, firstBeatSec)
+  return bar - Math.floor(bar)
+}
+
+/**
+ * Snap pra próxima barra/frase que seja múltiplo de `targetBars`.
+ * Retorna o segundo exato do snap + número da barra + offset do grid original.
+ */
+export function snapToBar(
+  sec: number,
+  bpm: number,
+  firstBeatSec: number,
+  targetBars: number = 8
+): { snappedSec: number; barNumber: number; offsetFromGrid: number } {
+  if (bpm <= 0) {
+    return { snappedSec: sec, barNumber: 0, offsetFromGrid: 0 }
+  }
+
+  const beatDuration = 60 / bpm
+  const barDuration = beatDuration * 4
+  const barsElapsed = (sec - firstBeatSec) / barDuration
+
+  // Próximo múltiplo de targetBars (arredonda pra cima)
+  const nextMultiple = Math.ceil(barsElapsed / targetBars) * targetBars
+  const snappedSec = firstBeatSec + nextMultiple * barDuration
+
+  // Offset do ponto ORIGINAL (antes do snap) — pra UI avisar se tava "fora"
+  const offset = barsElapsed - Math.floor(barsElapsed)
+
+  return {
+    snappedSec,
+    barNumber: nextMultiple,
+    offsetFromGrid: offset,
+  }
 }

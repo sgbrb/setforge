@@ -75,6 +75,7 @@ export default function Home() {
           key: t.key,
           energy: t.energy,
           source: 'upload',
+          firstBeatSec: t.firstBeatSec ?? 0,   // 🆕
         }))
 
         const newAnalyses: Record<string, AudioAnalysis> = {}
@@ -213,6 +214,7 @@ export default function Home() {
         key: track.key || '',
         energy: track.energy || 7,
         durationSec: durationSec ?? 0,
+        firstBeatSec: track.firstBeatSec ?? 0,   // 
       }),
     })
       .then(res => {
