@@ -468,7 +468,22 @@ export function discoverMixPoints(
   // Ordena por score desc
   candidates.sort((a, b) => b.score - a.score)
 
-  // Melhor = primeiro. Alternativas = próximos 3 (com score próximo)
+  // 🆕 FALLBACK: se não achou nenhum candidato, cria um default
+  if (candidates.length === 0) {
+    const fallback: MixPointCandidate = {
+      exitFromA: durationA * 0.75,
+      enterIntoB: 0,
+      crossfadeBars: 16,
+      score: 30,
+      reasons: ['fallback — sem candidatos de mix point detectados'],
+      snapPriority: 4,
+      exitLabel: 'fallback',
+      enterLabel: 'fallback',
+    }
+    return { best: fallback, alternatives: [] }
+  }
+
+  // Melhor = primeiro. Alternativas = próximos 3
   const best = candidates[0]
   const alternatives = candidates.slice(1, 4)
 
@@ -495,23 +510,35 @@ export function calculateMixTimeline(
     trackA, trackB, analysisA, analysisB, durationA, durationB
   )
 
+  // 🆕 Fallback seguro (caso o discoverMixPoints retorne best vazio)
+  const safeBest = best ?? {
+    exitFromA: durationA * 0.75,
+    enterIntoB: 0,
+    crossfadeBars: 16,
+    score: 30,
+    reasons: ['fallback — sem candidatos de mix point detectados'],
+    snapPriority: 4,
+    exitLabel: 'fallback',
+    enterLabel: 'fallback',
+  }
+
   // 🆕 Usa os pontos escolhidos pelo discovery
-  const crossfadeEnd = best.exitFromA
-  const crossfadeBars = best.crossfadeBars
+  const crossfadeEnd = safeBest.exitFromA
+  const crossfadeBars = safeBest.crossfadeBars
   const bpm = analysisA.bpm || trackA.bpm || 120
   const barDuration = secondsPerBar(bpm)
   const crossfadeDuration = barDuration * crossfadeBars
   const crossfadeStart = Math.max(0, crossfadeEnd - crossfadeDuration)
 
-  const playBAtSec = best.enterIntoB
-  const introB = { time: best.enterIntoB, confidence: 'medium' as const }
+  const playBAtSec = safeBest.enterIntoB
+  const introB = { time: safeBest.enterIntoB, confidence: 'medium' as const }
 
   // Confidence geral baseado no score
   const confidence: 'high' | 'medium' | 'low' =
-    best.score >= 80 ? 'high' : best.score >= 60 ? 'medium' : 'low'
+    safeBest.score >= 80 ? 'high' : safeBest.score >= 60 ? 'medium' : 'low'
 
   // Notas
-  notes.push(`Score ${best.score}/100 — ${best.reasons.slice(0, 3).join(' · ')}`)
+  notes.push(`Score ${safeBest.score}/100 — ${safeBest.reasons.slice(0, 3).join(' · ')}`)
 
   if (crossfadeBars < 16) {
     notes.push(`Crossfade reduzido para ${crossfadeBars} barras (espaço limitado)`)
@@ -536,8 +563,8 @@ export function calculateMixTimeline(
 
     playBAtSec,
     playBAtFormatted: formatSecondsWithDecimal(playBAtSec),
-    introEndBSec: best.enterIntoB,
-    introEndBFormatted: formatSeconds(best.enterIntoB),
+    introEndBSec: safeBest.enterIntoB,
+    introEndBFormatted: formatSeconds(safeBest.enterIntoB),
 
     playAtFormatted: formatSeconds(crossfadeStart),
     crossfadeStartFormatted: formatSeconds(crossfadeStart),
@@ -558,10 +585,10 @@ export function calculateMixTimeline(
     playBAtGlobalFormatted: formatSeconds(playBAtGlobalSec),
 
     // 🆕 Discovery
-    score: best.score,
-    scoreReasons: best.reasons,
-    exitLabel: best.exitLabel,
-    enterLabel: best.enterLabel,
+    score: safeBest.score,
+    scoreReasons: safeBest.reasons,
+    exitLabel: safeBest.exitLabel,
+    enterLabel: safeBest.enterLabel,
     alternatives,
   }
 }

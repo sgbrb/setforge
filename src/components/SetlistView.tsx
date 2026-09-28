@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { GeneratedSetlist } from '@/lib/types'
+import { GeneratedSetlist, Track, Folder } from '@/lib/types'
 import {
   MixTimeline,
   MixPointCandidate,
@@ -9,6 +9,7 @@ import {
   AudioSegment,
   formatSeconds,
   calculateFullTimeline,
+  discoverMixPoints,
 } from '@/lib/mix-timeline'
 import CompatibilityMatrix from './CompatibilityMatrix'
 
@@ -17,6 +18,8 @@ interface SetlistViewProps {
   onRegenerate?: () => void
   analyses?: Record<string, AudioAnalysis>
   durations?: Record<string, number>
+  allTracks?: Track[]
+  allFolders?: Folder[]
 }
 
 export default function SetlistView({
@@ -24,33 +27,94 @@ export default function SetlistView({
   onRegenerate,
   analyses,
   durations,
+  allTracks = [],
+  allFolders = [],
 }: SetlistViewProps) {
-  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
+ const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
+  const [showMatrix, setShowMatrix] = useState(false)
 
   // Cadeia completa
-  const transitions = useMemo(() => {
-    if (!analyses || !durations) return []
+const transitions = useMemo(() => {
+  if (!analyses || !durations) return []
 
-    const items = setlist.setlist.map(t => ({
-      track: t as any,
-      analysis: analyses[t.id],
-      duration: durations[t.id] ?? 0,
-    }))
+  const items = setlist.setlist.map(t => ({
+    track: t as any,
+    analysis: analyses[t.id],
+    duration: durations[t.id] ?? 0,
+  }))
 
-    const allHaveAnalysis = items.every(i => i.analysis)
-    if (!allHaveAnalysis) return []
+  const allHaveAnalysis = items.every(i => i.analysis)
+  if (!allHaveAnalysis) return []
 
-    return calculateFullTimeline(items)
-  }, [setlist, analyses, durations])
+  return calculateFullTimeline(items)
+}, [setlist, analyses, durations])
+
+  // 🆕 Sugestões de substitutas pra transições problemáticas (score < 60)
+  const suggestions = useMemo(() => {
+    if (!analyses || !durations) return {}
+    if (!allTracks || allTracks.length === 0) return {}
+
+    const map: Record<number, Array<{ track: Track; score: number; folderName: string | null }>> = {}
+    const setlistIds = new Set(setlist.setlist.map(t => t.id))
+
+    for (let i = 0; i < transitions.length; i++) {
+      const t = transitions[i]
+      const score = t.timeline.score ?? 0
+      if (score >= 60) continue
+
+      const trackA = t.from as any as Track
+      const analysisA = analyses[trackA.id]
+      const durationA = durations[trackA.id] ?? 0
+      if (!analysisA || durationA <= 0) continue
+
+      const candidates = allTracks.filter(candidate => {
+        if (setlistIds.has(candidate.id)) return false
+        if (!analyses[candidate.id]) return false
+        const dur = durations[candidate.id] ?? 0
+        if (dur <= 0) return false
+        return true
+      })
+
+      const scored = candidates.map(candidate => {
+        const analysisB = analyses[candidate.id]
+        const durationB = durations[candidate.id] ?? 0
+
+        const { best } = discoverMixPoints(
+          trackA as any,
+          candidate as any,
+          analysisA,
+          analysisB,
+          durationA,
+          durationB
+        )
+
+        const folder = candidate.folderId
+          ? allFolders.find(f => f.id === candidate.folderId)
+          : null
+
+        return {
+          track: candidate,
+          score: best.score,
+          folderName: folder?.name ?? null,
+        }
+      })
+
+      scored.sort((a, b) => b.score - a.score)
+      map[i] = scored.slice(0, 3)
+    }
+
+    return map
+  }, [transitions, analyses, durations, allTracks, allFolders, setlist])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* ALERTA DE COMPATIBILIDADE */}
-      {analyses && durations && (
+          {/* ALERTA DE COMPATIBILIDADE */}
+            {analyses && durations && (
         <CompatibilityAlert
           setlist={setlist}
           analyses={analyses}
           durations={durations}
+          suggestions={suggestions}
         />
       )}
 
@@ -81,9 +145,32 @@ export default function SetlistView({
         </div>
       )}
 
-      {/* MATRIZ DE COMPATIBILIDADE */}
+            {/* MATRIZ DE COMPATIBILIDADE — escondida atrás de botão */}
       {analyses && durations && setlist.setlist.length >= 2 && (
-        <CompatibilityMatrix tracks={setlist.setlist} />
+        <div>
+          <button
+            onClick={() => setShowMatrix(!showMatrix)}
+            style={{
+              width: '100%',
+              padding: '10px 14px',
+              background: 'var(--surface2)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              color: 'var(--muted)',
+              fontSize: 12,
+              fontFamily: 'var(--font-mono, monospace)',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            {showMatrix ? '▼' : '▶'} ver matriz de compatibilidade (avançado)
+          </button>
+          {showMatrix && (
+            <div style={{ marginTop: 12 }}>
+              <CompatibilityMatrix tracks={setlist.setlist} />
+            </div>
+          )}
+        </div>
       )}
 
       {/* SEQUÊNCIA DE FAIXAS */}
@@ -1137,14 +1224,22 @@ function analyzeTransitions(
   }
 }
 
+interface SuggestionEntry {
+  track: Track
+  score: number
+  folderName: string | null
+}
+
 function CompatibilityAlert({
   setlist,
   analyses,
   durations,
+  suggestions,
 }: {
   setlist: GeneratedSetlist
   analyses: Record<string, AudioAnalysis>
   durations: Record<string, number>
+  suggestions: Record<number, SuggestionEntry[]>
 }) {
   const result = analyzeTransitions(setlist, analyses, durations)
 
@@ -1226,51 +1321,136 @@ function CompatibilityAlert({
         gap: 6,
         paddingLeft: 32,
       }}>
-        {issues.map((issue, i) => (
-          <div
-            key={i}
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 10,
-              padding: '8px 12px',
-              background: 'var(--surface)',
-              border: `1px solid ${issue.severity === 'critical' ? 'rgba(252, 92, 92, 0.3)' : 'rgba(252, 204, 92, 0.3)'}`,
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-          >
-            <span style={{
-              color: issue.severity === 'critical' ? 'var(--red)' : 'var(--yellow)',
-              fontFamily: 'var(--font-mono, monospace)',
-              fontWeight: 700,
-              flexShrink: 0,
-              minWidth: 60,
-            }}>
-              {issue.index + 1} → {issue.index + 2}
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{
-                fontSize: 11,
-                color: 'var(--muted)',
-                fontFamily: 'var(--font-mono, monospace)',
-                marginBottom: 2,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {issue.fromTitle} → {issue.toTitle} · score {issue.score}/100
-              </p>
-              <p style={{
+                {issues.map((issue, i) => {
+          const issueSuggestions = suggestions[issue.index] || []
+
+          return (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                padding: '10px 12px',
+                background: 'var(--surface)',
+                border: `1px solid ${issue.severity === 'critical' ? 'rgba(252, 92, 92, 0.3)' : 'rgba(252, 204, 92, 0.3)'}`,
+                borderRadius: 8,
                 fontSize: 12,
-                color: 'var(--text)',
-                lineHeight: 1.4,
-              }}>
-                {issue.reason}
-              </p>
+              }}
+            >
+              {/* Cabeçalho da issue */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <span style={{
+                  color: issue.severity === 'critical' ? 'var(--red)' : 'var(--yellow)',
+                  fontFamily: 'var(--font-mono, monospace)',
+                  fontWeight: 700,
+                  flexShrink: 0,
+                  minWidth: 60,
+                }}>
+                  {issue.index + 1} → {issue.index + 2}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{
+                    fontSize: 11,
+                    color: 'var(--muted)',
+                    fontFamily: 'var(--font-mono, monospace)',
+                    marginBottom: 2,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {issue.fromTitle} → {issue.toTitle} · score {issue.score}/100
+                  </p>
+                  <p style={{
+                    fontSize: 12,
+                    color: 'var(--text)',
+                    lineHeight: 1.4,
+                  }}>
+                    {issue.reason}
+                  </p>
+                </div>
+              </div>
+
+              {/* Sugestões */}
+              {issueSuggestions.length > 0 && (
+                <div style={{
+                  marginTop: 4,
+                  paddingLeft: 70,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}>
+                  <p style={{
+                    fontSize: 10,
+                    color: 'var(--accent)',
+                    fontFamily: 'var(--font-mono, monospace)',
+                    textTransform: 'uppercase',
+                    letterSpacing: 1,
+                  }}>
+                    💡 troque "{setlist.setlist[issue.index + 1]?.title?.split(' - ')[0] || 'esta'}" por:
+                  </p>
+                  {issueSuggestions.map((sug, j) => (
+                    <div
+                      key={j}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 10px',
+                        background: 'var(--surface2)',
+                        borderRadius: 6,
+                        fontSize: 11,
+                      }}
+                    >
+                      <span style={{
+                        color: 'var(--green)',
+                        fontFamily: 'var(--font-mono, monospace)',
+                        fontWeight: 700,
+                        minWidth: 40,
+                      }}>
+                        {sug.score}/100
+                      </span>
+                      <span style={{
+                        color: 'var(--text)',
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {sug.track.title}
+                      </span>
+                      {sug.folderName && (
+                        <span style={{
+                          fontSize: 10,
+                          color: 'var(--muted)',
+                          fontFamily: 'var(--font-mono, monospace)',
+                          padding: '1px 6px',
+                          background: 'var(--surface)',
+                          borderRadius: 3,
+                        }}>
+                          {sug.folderName}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Aviso se não tem sugestões */}
+              {issueSuggestions.length === 0 && (
+                <div style={{
+                  marginTop: 4,
+                  paddingLeft: 70,
+                  fontSize: 11,
+                  color: 'var(--muted)',
+                  fontStyle: 'italic',
+                }}>
+                  sem sugestões disponíveis (biblioteca pequena ou todas as faixas já estão no set)
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

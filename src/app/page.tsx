@@ -663,12 +663,14 @@ export default function Home() {
                   <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
                 </div>
               )}
-              {setlist && (
+                            {setlist && (
                 <SetlistView
                   setlist={setlist}
                   onRegenerate={generate}
                   analyses={analyses}
                   durations={durations}
+                  allTracks={tracks}
+                  allFolders={folders}
                 />
               )}
             </Panel>
