@@ -33,6 +33,8 @@ export interface SetConfig {
 export interface SetlistTrack extends Track {
   position: number
   transitionNote?: string
+  durationSec?: number 
+  firstBeatSec?: number 
 }
 
 export interface GeneratedSetlist {

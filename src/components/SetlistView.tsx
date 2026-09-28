@@ -12,6 +12,7 @@ import {
   discoverMixPoints,
 } from '@/lib/mix-timeline'
 import CompatibilityMatrix from './CompatibilityMatrix'
+import ExportRekordboxModal from './ExportRekordboxModal'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -32,6 +33,7 @@ export default function SetlistView({
 }: SetlistViewProps) {
  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
   const [showMatrix, setShowMatrix] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(false)
 
   // Cadeia completa
 const transitions = useMemo(() => {
@@ -145,33 +147,34 @@ const transitions = useMemo(() => {
         </div>
       )}
 
-            {/* MATRIZ DE COMPATIBILIDADE — escondida atrás de botão */}
-      {analyses && durations && setlist.setlist.length >= 2 && (
-        <div>
-          <button
-            onClick={() => setShowMatrix(!showMatrix)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              background: 'var(--surface2)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              color: 'var(--muted)',
-              fontSize: 12,
-              fontFamily: 'var(--font-mono, monospace)',
-              cursor: 'pointer',
-              textAlign: 'left',
-            }}
-          >
-            {showMatrix ? '▼' : '▶'} ver matriz de compatibilidade (avançado)
-          </button>
-          {showMatrix && (
-            <div style={{ marginTop: 12 }}>
-              <CompatibilityMatrix tracks={setlist.setlist} />
-            </div>
-          )}
-        </div>
-      )}
+            {/* Matriz de compatibilidade — DESABILITADA (descomentar pra reativar)
+
+      <div>
+        <button
+          onClick={() => setShowMatrix(!showMatrix)}
+          style={{
+            width: '100%',
+            padding: '10px 14px',
+            background: 'var(--surface2)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            color: 'var(--muted)',
+            fontSize: 12,
+            fontFamily: 'var(--font-mono, monospace)',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          {showMatrix ? '▼' : '▶'} ver matriz de compatibilidade (avançado)
+        </button>
+        {showMatrix && (
+          <div style={{ marginTop: 12 }}>
+            <CompatibilityMatrix tracks={setlist.setlist} />
+          </div>
+        )}
+      </div>
+
+      */}
 
       {/* SEQUÊNCIA DE FAIXAS */}
       <div>
@@ -303,6 +306,30 @@ const transitions = useMemo(() => {
         </div>
       )}
 
+            {/* EXPORTAR PRO REKORDBOX */}
+      {transitions.length > 0 && (
+        <button
+          onClick={() => setShowExportModal(true)}
+          style={{
+            padding: '12px 20px',
+            background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+            border: 'none',
+            borderRadius: 10,
+            color: '#fff',
+            fontFamily: 'inherit',
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+          }}
+        >
+          📥 exportar pro Rekordbox
+        </button>
+      )}
+
       {/* REGENERAR */}
       {onRegenerate && (
         <button
@@ -325,6 +352,15 @@ const transitions = useMemo(() => {
         >
           ⟳ gerar novamente
         </button>
+      )}
+
+      {/* MODAL DE EXPORT */}
+      {showExportModal && (
+        <ExportRekordboxModal
+          setlist={setlist}
+          transitions={transitions}
+          onClose={() => setShowExportModal(false)}
+        />
       )}
     </div>
   )

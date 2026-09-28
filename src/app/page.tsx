@@ -516,7 +516,7 @@ export default function Home() {
         <div style={{ width: 38, height: 38, background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, color: '#fff', fontSize: 16, boxShadow: '0 0 20px rgba(124,92,252,0.3)' }}>SF</div>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>SetForge</h1>
-          <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>gerador de set list com IA</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>gerador de set list</p>
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -655,7 +655,7 @@ export default function Home() {
 
           {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
           {canGenerateSetlist && (loading || setlist) && (
-            <Panel title="set list gerado" badge={setlist ? '● gerado com IA' : undefined}>
+            <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
               {loading && (
                 <div style={{ textAlign: 'center', padding: 48 }}>
                   <div style={{ width: 40, height: 40, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
