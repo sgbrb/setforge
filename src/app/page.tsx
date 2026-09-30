@@ -613,19 +613,34 @@ export default function Home() {
             <div style={{ marginTop: 20 }}>
               {canGenerateSetlist ? (
                 <>
-                  <button
-                    onClick={generate}
-                    disabled={filteredTracks.length < 3 || loading}
-                    style={{
-                      ...btnStyle('primary'),
-                      width: '100%',
-                      justifyContent: 'center',
-                      opacity: filteredTracks.length < 3 ? 0.5 : 1,
-                      cursor: filteredTracks.length < 3 ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {loading ? '⟳ montando...' : `✦ montar setlist · ${folderName}`}
-                  </button>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      onClick={generate}
+                      disabled={filteredTracks.length < 3 || loading}
+                      style={{
+                        ...btnStyle('primary'),
+                        flex: 1,
+                        justifyContent: 'center',
+                        opacity: filteredTracks.length < 3 ? 0.5 : 1,
+                        cursor: filteredTracks.length < 3 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {loading ? '⟳ montando...' : `✦ montar setlist · ${folderName}`}
+                    </button>
+
+                    <button
+                      onClick={() => alert('em breve: gerar inteligente (TSP) — Fase 5.3')}
+                      disabled={loading}
+                      style={{
+                        ...btnStyle('secondary'),
+                        flex: 1,
+                        justifyContent: 'center',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      ⚡ gerar inteligente
+                    </button>
+                  </div>
                   {filteredTracks.length < 3 && (
                     <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
                       adicione pelo menos 3 faixas nesta pasta para montar
