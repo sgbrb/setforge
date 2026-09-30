@@ -9,17 +9,36 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 // 🆕 Path absoluto (XML tá no Desktop)
-const XML_PATH = 'C:\\Users\\bruno\\OneDrive\\Desktop\\rekordbox-full.xml'
+const XML_PATH_FALLBACK = 'C:\\Users\\bruno\\OneDrive\\Desktop\\rekordbox-full.xml'
 
 export async function POST(req: NextRequest) {
   const startTime = Date.now()
 
   try {
     // ============================================================
-    // 1. LÊ O XML
+    // 1. LÊ O XML (upload do cliente OU fallback do disco)
     // ============================================================
-    console.log(`📖 Lendo XML: ${XML_PATH}`)
-    const xmlContent = await readFile(XML_PATH, 'utf-8')
+    let xmlContent: string
+
+    const contentType = req.headers.get('content-type') || ''
+    if (contentType.includes('multipart/form-data')) {
+      // Upload do cliente
+      const formData = await req.formData()
+      const file = formData.get('xml') as File | null
+      if (!file) {
+        return NextResponse.json(
+          { error: 'Nenhum arquivo XML enviado' },
+          { status: 400 }
+        )
+      }
+      xmlContent = await file.text()
+      console.log(`📖 XML recebido via upload: ${file.name}`)
+    } else {
+      // Fallback: lê do disco
+      console.log(`📖 Lendo XML do disco: ${XML_PATH_FALLBACK}`)
+      xmlContent = await readFile(XML_PATH_FALLBACK, 'utf-8')
+    }
+
     console.log(`   Tamanho: ${(xmlContent.length / 1024 / 1024).toFixed(2)} MB`)
 
     // ============================================================

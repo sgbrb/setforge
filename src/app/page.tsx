@@ -586,6 +586,19 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
+              <button
+                onClick={() => alert('em breve: importar XML (5.4c)')}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  color: 'var(--muted)',
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  cursor: 'pointer',
+                }}
+              >📥 importar XML</button>
               <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>● logado</span>
               <button
                 onClick={async () => {
