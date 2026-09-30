@@ -6,6 +6,7 @@ import FolderList from '@/components/FolderList'
 import TrackList from '@/components/TrackList'
 import { Track, Folder, SetConfig, GeneratedSetlist } from '@/lib/types'
 import SetlistView from '@/components/SetlistView'
+import SmartSetlistModal, { type SmartSetlistFilters } from '@/components/SmartSetlistModal'
 import { computeOptimalOrder, scoreOrder } from '@/lib/optimal-order'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 
@@ -37,6 +38,9 @@ export default function Home() {
 
   const [setlist, setSetlist] = useState<GeneratedSetlist | null>(null)
   const [loading, setLoading] = useState(false)
+
+  const [smartModalOpen, setSmartModalOpen] = useState(false)
+const [smartLoading, setSmartLoading] = useState(false)
 
   const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
   const [durations, setDurations] = useState<Record<string, number>>({})
@@ -437,6 +441,66 @@ export default function Home() {
       })
       .catch(err => console.warn('[page] Erro ao apagar análise:', err))
   }
+// ⚡ Fase 5.3 — gera setlist via TSP (/api/generate-smart-setlist)
+const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
+  setSmartLoading(true)
+  setSetlist(null)
+  try {
+    const res = await fetch('/api/generate-smart-setlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bpmTarget: filters.bpmTarget,
+        bpmRange: filters.bpmRange,
+        camelotStrict: filters.camelotStrict,
+        setSize: filters.setSize,
+        onlyAnalyzed: filters.onlyAnalyzed,
+      }),
+    })
+
+    if (res.status === 401) {
+      alert('Você precisa fazer login para gerar um setlist.')
+      window.location.href = '/login'
+      return
+    }
+
+    const data = await res.json()
+    if (!res.ok) {
+      alert(data.error || 'Erro ao gerar setlist inteligente')
+      return
+    }
+
+    // Adapta resposta da nossa rota pro formato que SetlistView espera
+    const adapted: GeneratedSetlist = {
+      setlist: data.tracks.map((t: any, i: number) => ({
+        ...t,
+        position: i + 1,
+        transitionNote: `score médio TSP: ${data.averageScore}/100`,
+      })),
+      analysis:
+        `Setlist gerado por TSP (nearest neighbor + 2-opt + or-opt). ` +
+        `${data.tracks.length} faixas de ${data.candidates} candidatas. ` +
+        `Score médio ${data.averageScore}/100, pior ${data.worstScore}/100. ` +
+        `Tempo ${data.elapsedMs}ms (${data.attempts} tentativa${data.attempts !== 1 ? 's' : ''}).`,
+      djTip:
+        data.duplicate
+          ? data.warning || 'Set repetido — tente mudar os filtros.'
+          : 'Setlist otimizado por algoritmo. Revise as transições antes de tocar.',
+      peakMoment: 'Análise de pico será gerada na Fase 3 (análise sob demanda).',
+      totalDuration: `${data.tracks.length}`,
+    }
+
+    setSetlist(adapted)
+    setSmartModalOpen(false)
+    console.log(`[page] Setlist inteligente: ${data.tracks.length} faixas, score ${data.averageScore}/100`)
+  } catch (error) {
+    console.error('[page] Erro no generate-smart:', error)
+    const msg = error instanceof Error ? error.message : 'Erro desconhecido'
+    alert(`Erro ao gerar setlist inteligente: ${msg}`)
+  } finally {
+    setSmartLoading(false)
+  }
+}
 
   // 🎼 Gera setlist via IA
   const generate = async () => {
@@ -629,7 +693,7 @@ export default function Home() {
                     </button>
 
                     <button
-                      onClick={() => alert('em breve: gerar inteligente (TSP) — Fase 5.3')}
+                      onClick={() => setSmartModalOpen(true)}
                       disabled={loading}
                       style={{
                         ...btnStyle('secondary'),
@@ -692,6 +756,13 @@ export default function Home() {
           )}
         </main>
       </div>
+            <SmartSetlistModal
+        open={smartModalOpen}
+        defaultSetSize={30}
+        onClose={() => setSmartModalOpen(false)}
+        onGenerate={handleSmartGenerate}
+        loading={smartLoading}
+      />
     </div>
   )
 }

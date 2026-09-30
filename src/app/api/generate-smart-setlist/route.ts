@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@prisma/client'
 import { generateSmartSet } from '@/lib/tsp'
 import type { Track as FrontendTrack } from '@/lib/types'
 
@@ -113,12 +114,13 @@ export async function POST(req: NextRequest) {
 
     // 1. Parse do body
     let body: {
-      bpmTarget?: number
-      bpmRange?: number
-      camelotStrict?: boolean
-      setSize?: number
-      seed?: number
-    } = {}
+  bpmTarget?: number
+  bpmRange?: number
+  camelotStrict?: boolean
+  setSize?: number
+  seed?: number
+  onlyAnalyzed?: boolean
+} = {}
 
     try {
       body = await req.json()
@@ -168,13 +170,14 @@ export async function POST(req: NextRequest) {
 
     // 3. Busca faixas do usuário (bpm > 0, fora das excluídas)
     const prismaTracks = await prisma.track.findMany({
-      where: {
-        userId,
-        bpm: { gt: 0 },
-        ...(excludedTrackIds.size > 0
-          ? { id: { notIn: [...excludedTrackIds] } }
-          : {}),
-      },
+  where: {
+    userId,
+    bpm: { gt: 0 },
+    ...(body.onlyAnalyzed ? { segments: { not: Prisma.DbNull } } : {}),
+    ...(excludedTrackIds.size > 0
+      ? { id: { notIn: [...excludedTrackIds] } }
+      : {}),
+  },
       select: {
         id: true,
         folderId: true,
