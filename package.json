@@ -16,6 +16,7 @@
     "axios": "^1.7.2",
     "bcryptjs": "^2.4.3",
     "dotenv": "^17.4.2",
+    "fast-xml-parser": "^5.11.2",
     "music-tempo": "^1.0.3",
     "next": "14.2.0",
     "next-auth": "^4.24.15",

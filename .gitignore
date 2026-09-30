@@ -55,3 +55,6 @@ __pycache__/
 teste_*.py
 teste_*.txt
 pacotes.txt
+# Rekordbox XML (dados locais, não versionar)
+rekordbox-full.xml
+*.xmltest-parser.mjs 
