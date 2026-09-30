@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { readFile } from 'fs/promises'
-import path from 'path'
 import { prisma } from '@/lib/prisma'
 import { parseRekordboxXml, filterAudioTracks } from '@/lib/rekordbox-import'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
-const XML_PATH = path.join(process.cwd(), 'rekordbox-full.xml')
+// 🆕 Path absoluto (XML tá no Desktop)
+const XML_PATH = 'C:\\Users\\bruno\\OneDrive\\Desktop\\rekordbox-full.xml'
 
 export async function POST(req: NextRequest) {
   const startTime = Date.now()
@@ -35,48 +37,56 @@ export async function POST(req: NextRequest) {
     }
 
     // ============================================================
-    // 3. BUSCA USUÁRIO
+    // 3. AUTENTICAÇÃO
     // ============================================================
-    const user = await prisma.user.findFirst()
-    if (!user) {
-      return NextResponse.json({ error: 'Nenhum usuário no banco' }, { status: 400 })
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
     }
-    console.log(`👤 Usuário: ${user.email}`)
+    console.log(`👤 Usuário: ${session.user.email}`)
 
     // ============================================================
-    // 4. LIMPA O QUE JÁ EXISTE (idempotente)
+    // 4. UPSERT em chunks de 100 (preserva as 215 existentes)
     // ============================================================
-    const deleted = await prisma.track.deleteMany({ where: { userId: user.id } })
-    console.log(`🗑️ Deletadas (pré-import): ${deleted.count}`)
-
-    // ============================================================
-    // 5. BATCH INSERT com createMany (10-50x mais rápido)
-    // ============================================================
-    const BATCH_SIZE = 1000
+    const BATCH_SIZE = 100
     let created = 0
+    let updated = 0
 
     for (let i = 0; i < validTracks.length; i += BATCH_SIZE) {
       const batch = validTracks.slice(i, i + BATCH_SIZE)
 
-      const data = batch.map(t => ({
-        userId: user.id,
-        title: t.name,
-        artist: t.artist,
-        bpm: t.bpm,
-        key: t.key,
-        durationSec: t.durationSec,
-        firstBeatSec: t.firstBeatSec,
-        energy: 7,
-        fileHash: t.trackId, // TrackID do Rekordbox
-      }))
+      const results = await prisma.$transaction(
+        batch.map(t => prisma.track.upsert({
+          where: { rekordboxId: t.trackId },
+          update: {
+            title: t.name,
+            artist: t.artist || '',
+            bpm: Math.round(t.bpm),
+            key: t.key || '',                 // ✅ Camelot já convertido
+            durationSec: t.durationSec,       // ✅ nome correto
+          },
+          create: {
+            userId: session.user.id,
+            rekordboxId: t.trackId,
+            title: t.name,
+            artist: t.artist || '',
+            bpm: Math.round(t.bpm),
+            key: t.key || '',                 // ✅ Camelot
+            durationSec: t.durationSec,       // ✅ nome correto
+            firstBeatSec: 0,
+            energy: 7,
+            folderId: null,
+            segments: undefined,
+          },
+        }))
+      )
 
-      const result = await prisma.track.createMany({
-        data,
-        skipDuplicates: true,
-      })
+      for (const r of results) {
+        if (r.createdAt === r.updatedAt) created++
+        else updated++
+      }
 
-      created += result.count
-      console.log(`   Lote ${Math.floor(i / BATCH_SIZE) + 1}: +${result.count} (total: ${created})`)
+      console.log(`   Lote ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length} processadas`)
     }
 
     // ============================================================
@@ -85,14 +95,15 @@ export async function POST(req: NextRequest) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`✅ Import concluído em ${elapsed}s (${created} faixas)`)
 
-    return NextResponse.json({
+       return NextResponse.json({
       success: true,
       elapsedSec: Number(elapsed),
       entries: collection.entries,
       parsed: collection.tracks.length,
       valid: validTracks.length,
       created,
-      userId: user.id,
+      updated,
+      userId: session.user.id,
     })
   } catch (error: any) {
     console.error('❌ Erro no import:', error)
