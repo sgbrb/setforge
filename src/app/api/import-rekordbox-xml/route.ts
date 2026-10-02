@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     // ============================================================
     // 4. UPSERT em chunks de 100 (preserva as 215 existentes)
     // ============================================================
-    const BATCH_SIZE = 100
+    const BATCH_SIZE = 500
     let created = 0
     let updated = 0
 
