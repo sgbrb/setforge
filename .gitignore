@@ -57,4 +57,6 @@ teste_*.txt
 pacotes.txt
 # Rekordbox XML (dados locais, não versionar)
 rekordbox-full.xml
-*.xmltest-parser.mjs 
+*.xml
+test-parser.mjs
+scripts/
