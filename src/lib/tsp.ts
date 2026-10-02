@@ -128,6 +128,56 @@ export function filterCandidates(
 // FASE 2 — CONSTRUÇÃO GREEDY (nearest neighbor)
 // ============================================================
 
+// ============================================================
+// FASE 1.5 — DIVERSIDADE (Regra 3)
+// ============================================================
+
+/**
+ * Filtra o pool pra garantir diversidade de famílias (1-12).
+ *
+ * Regra rígida:
+ *   - Máx N faixas por key (A ou B) da família
+ *   - N = max(1, floor(setSize / 15))
+ *   - Sem +1 (nem key individual nem família podem estourar)
+ *
+ * Ex: setSize=30 → N=2 → máx 2x 12A + 2x 12B = 4 faixas da família 12
+ */
+export function diversifyPool(
+  pool: Track[],
+  setSize: number
+): Track[] {
+
+  const maxPorLetra = Math.max(1, Math.floor(setSize / 15))
+
+  // Agrupa por família (só o número, ignora A/B)
+  const byFamilia = new Map<string, Track[]>()
+  for (const t of pool) {
+    const m = (t.key || '').match(/^(\d+)/)
+    if (!m) continue
+    const fam = m[1]
+    if (!byFamilia.has(fam)) byFamilia.set(fam, [])
+    byFamilia.get(fam)!.push(t)
+  }
+
+  const result: Track[] = []
+
+    for (const tracks of byFamilia.values()) {
+    // Separa A e B
+    const a: Track[] = []
+    const b: Track[] = []
+    for (const t of tracks) {
+      if (t.key.endsWith('A')) a.push(t)
+      else if (t.key.endsWith('B')) b.push(t)
+    }
+
+        const useA = a.slice(0, maxPorLetra)
+    const useB = b.slice(0, maxPorLetra)
+    result.push(...useA, ...useB)
+  }
+
+  return result
+}
+
 function nearestNeighbor(
   pool: Track[],
   startIdx: number,
@@ -261,12 +311,16 @@ export function generateSmartSet(
   const twoOptPasses = options.twoOptPasses ?? 2
 
   // FASE 1 — PRÉ-FILTRO
-  const candidates = filterCandidates(
+    const filtered = filterCandidates(
     library,
     bpmTarget,
     bpmRange,
     minCamelotScore
   )
+
+  // FASE 1.5 — DIVERSIDADE (Regra 3)
+  const diversified = diversifyPool(filtered, count)
+  const candidates = diversified.length >= count ? diversified : filtered
 
   if (candidates.length < count) {
     return {
