@@ -35,6 +35,24 @@ export default function SetlistView({
   const [showMatrix, setShowMatrix] = useState(false)
   const [showExportModal, setShowExportModal] = useState(false)
 
+  // 📋 Fase 5.6 — faixas do setlist SEM análise estrutural
+  const tracksWithoutAnalysis = useMemo(() => {
+    if (!analyses) return setlist.setlist
+    return setlist.setlist.filter(t => !analyses[t.id])
+  }, [setlist, analyses])
+
+  const copyMissingNames = async () => {
+    if (tracksWithoutAnalysis.length === 0) return
+    const text = tracksWithoutAnalysis.map(t => t.title).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      alert(`✅ ${tracksWithoutAnalysis.length} nome${tracksWithoutAnalysis.length !== 1 ? 's' : ''} copiado${tracksWithoutAnalysis.length !== 1 ? 's' : ''}.\n\nCole no Bloco de Notas, busque os arquivos no HD, e faça upload.`)
+    } catch (err) {
+      console.error('[SetlistView] Erro ao copiar:', err)
+      alert('Não foi possível copiar. Tenta de novo.')
+    }
+  }
+
   // Cadeia completa
 const transitions = useMemo(() => {
   if (!analyses || !durations) return []
@@ -110,6 +128,56 @@ const transitions = useMemo(() => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
+          {tracksWithoutAnalysis.length > 0 && (
+            <div style={{
+              padding: '12px 16px',
+              background: 'var(--surface2)',
+              border: '1px dashed var(--border)',
+              borderRadius: 10,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <p style={{
+                  fontSize: 13,
+                  color: 'var(--fg)',
+                  fontFamily: 'var(--font-mono, monospace)',
+                  margin: 0,
+                }}>
+                  📋 {tracksWithoutAnalysis.length} de {setlist.setlist.length} faixa{setlist.setlist.length !== 1 ? 's' : ''} sem análise estrutural
+                </p>
+                <p style={{
+                  fontSize: 11,
+                  color: 'var(--muted)',
+                  margin: '4px 0 0 0',
+                }}>
+                  Faça upload dessas pra liberar o crossfade exato
+                </p>
+              </div>
+              <button
+                onClick={copyMissingNames}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+                  border: 'none',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                📋 copiar nomes
+              </button>
+            </div>
+          )}
+
           {/* ALERTA DE COMPATIBILIDADE */}
             {analyses && durations && (
         <CompatibilityAlert
