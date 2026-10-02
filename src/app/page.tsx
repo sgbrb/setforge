@@ -491,12 +491,13 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bpmTarget: filters.bpmTarget,
-        bpmRange: filters.bpmRange,
-        camelotStrict: filters.camelotStrict,
-        setSize: filters.setSize,
-        onlyAnalyzed: filters.onlyAnalyzed,
-      }),
+  bpmTarget: filters.bpmTarget,
+  bpmRange: filters.bpmRange,
+  camelotStrict: filters.camelotStrict,
+  setSize: filters.setSize,
+  onlyAnalyzed: filters.onlyAnalyzed,
+  folderId: selectedFolderId,
+}),
     })
 
     if (res.status === 401) {

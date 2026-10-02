@@ -113,14 +113,15 @@ export async function POST(req: NextRequest) {
     const userId = session.user.id
 
     // 1. Parse do body
-    let body: {
-  bpmTarget?: number
-  bpmRange?: number
-  camelotStrict?: boolean
-  setSize?: number
-  seed?: number
-  onlyAnalyzed?: boolean
-} = {}
+        let body: {
+      bpmTarget?: number
+      bpmRange?: number
+      camelotStrict?: boolean
+      setSize?: number
+      seed?: number
+      onlyAnalyzed?: boolean
+      folderId?: string | null
+    } = {}
 
     try {
       body = await req.json()
@@ -255,9 +256,38 @@ export async function POST(req: NextRequest) {
         signaturesMatch(sig, signature)
       )
 
-      if (!isDuplicate) {
-        // Achou um set único — retorna
+           if (!isDuplicate) {
+        // Achou um set único — salva no banco + retorna
+        const savedSetlist = await prisma.setlist.create({
+          data: {
+            name: `Smart · ${new Date().toLocaleDateString('pt-BR')}`,
+            eventType: 'Smart',
+            duration: 'auto',
+            energyCurve: 'auto',
+            audience: null,
+            analysis: `Setlist gerado por TSP · score médio ${result.averageScore}/100 · pior ${result.worstScore}/100 · ${attemptUsed} tentativa(s)`,
+            djTip: null,
+            peakMoment: null,
+            totalDuration: `${result.tracks.length} faixas`,
+            userId,
+            folderId: body.folderId ?? null,
+            tracks: {
+              create: result.tracks.map((t, i) => ({
+                position: i + 1,
+                trackId: t.id,
+                title: t.title,
+                artist: t.artist,
+                bpm: t.bpm,
+                key: t.key,
+                energy: t.energy,
+                transitionNote: null,
+              })),
+            },
+          },
+        })
+
         return NextResponse.json({
+          id: savedSetlist.id,
           tracks: result.tracks,
           averageScore: result.averageScore,
           worstScore: result.worstScore,
@@ -288,7 +318,37 @@ export async function POST(req: NextRequest) {
       )
     }
 
+        // Salva mesmo em duplicata (último resultado)
+    const savedSetlist = await prisma.setlist.create({
+      data: {
+        name: `Smart · ${new Date().toLocaleDateString('pt-BR')}`,
+        eventType: 'Smart',
+        duration: 'auto',
+        energyCurve: 'auto',
+        audience: null,
+        analysis: `Setlist gerado por TSP (duplicata após ${attemptUsed} tentativas) · score médio ${lastResult.averageScore}/100`,
+        djTip: null,
+        peakMoment: null,
+        totalDuration: `${lastResult.tracks.length} faixas`,
+        userId,
+        folderId: body.folderId ?? null,
+        tracks: {
+          create: lastResult.tracks.map((t, i) => ({
+            position: i + 1,
+            trackId: t.id,
+            title: t.title,
+            artist: t.artist,
+            bpm: t.bpm,
+            key: t.key,
+            energy: t.energy,
+            transitionNote: null,
+          })),
+        },
+      },
+    })
+
     return NextResponse.json({
+      id: savedSetlist.id,
       tracks: lastResult.tracks,
       averageScore: lastResult.averageScore,
       worstScore: lastResult.worstScore,
