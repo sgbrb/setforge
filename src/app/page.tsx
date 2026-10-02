@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import TrackUpload from '@/components/TrackUpload'
 import FolderList from '@/components/FolderList'
@@ -47,6 +47,10 @@ const [smartLoading, setSmartLoading] = useState(false)
 
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
   const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null)
+
+    const [importingXml, setImportingXml] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 🔒 Redireciona se não estiver logado
   useEffect(() => {
@@ -100,8 +104,8 @@ const [smartLoading, setSmartLoading] = useState(false)
       }
     }
 
-    loadTracks()
-  }, [status])
+       loadTracks()
+  }, [status, refreshKey])
 
   // 📁 Carrega pastas do banco
   useEffect(() => {
@@ -442,6 +446,43 @@ const [smartLoading, setSmartLoading] = useState(false)
       .catch(err => console.warn('[page] Erro ao apagar análise:', err))
   }
 // ⚡ Fase 5.3 — gera setlist via TSP (/api/generate-smart-setlist)
+  // 📥 Fase 5.4c — upload do XML do Rekordbox
+  const handleXmlUpload = async (file: File) => {
+    setImportingXml(true)
+    try {
+      const formData = new FormData()
+      formData.append('xml', file)
+
+      const res = await fetch('/api/import-rekordbox-xml', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        alert(data.error || 'Erro ao importar XML')
+        return
+      }
+
+      alert(
+        `✅ Import concluído em ${data.elapsedSec}s\n\n` +
+        `Faixas válidas: ${data.valid}\n` +
+        `Criadas: ${data.created}\n` +
+        `Atualizadas: ${data.updated}`
+      )
+
+      // Recarrega a lista de faixas
+      setRefreshKey(k => k + 1)
+    } catch (error) {
+      console.error('[page] Erro no import XML:', error)
+      const msg = error instanceof Error ? error.message : 'Erro desconhecido'
+      alert(`Erro ao importar XML: ${msg}`)
+    } finally {
+      setImportingXml(false)
+    }
+  }
+
 const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
   setSmartLoading(true)
   setSetlist(null)
@@ -586,19 +627,32 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
+                           <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xml"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleXmlUpload(file)
+                  e.target.value = '' // permite reenviar o mesmo arquivo
+                }}
+              />
               <button
-                onClick={() => alert('em breve: importar XML (5.4c)')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importingXml}
                 style={{
                   background: 'transparent',
                   border: '1px solid var(--border)',
                   borderRadius: 8,
-                  color: 'var(--muted)',
+                  color: importingXml ? 'var(--accent)' : 'var(--muted)',
                   padding: '6px 14px',
                   fontSize: 12,
                   fontFamily: 'var(--font-mono, monospace)',
-                  cursor: 'pointer',
+                  cursor: importingXml ? 'not-allowed' : 'pointer',
+                  opacity: importingXml ? 0.7 : 1,
                 }}
-              >📥 importar XML</button>
+              >{importingXml ? '⟳ importando...' : '📥 importar XML'}</button>
               <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>● logado</span>
               <button
                 onClick={async () => {
