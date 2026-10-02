@@ -8,7 +8,7 @@ const spaceMono = Space_Mono({ subsets: ['latin'], weight: ['400', '700'], varia
 
 export const metadata: Metadata = {
   title: 'SetForge — Gerador de Set List para DJs',
-  description: 'Crie set lists profissionais com IA. Integração com Spotify, SoundCloud e YouTube.',
+  description: 'Crie set lists profissionais',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
