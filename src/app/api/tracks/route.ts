@@ -93,21 +93,52 @@ export async function POST(req: NextRequest) {
             fileHash: fileHash ?? null,
           },
         })
-      : await prisma.track.create({
-          data: {
-            userId: session.user.id,
-            title,
-            artist: artist ?? '',
-            bpm: bpm ?? 0,
-            key: key ?? '',
-            energy: energy ?? 7,
-            durationSec: durationSec ?? 0,
-            firstBeatSec: body.firstBeatSec ?? 0,
-            folderId: folderId ?? null,
-            segments: segments ?? undefined,
-            fileHash: fileHash ?? null,
-          },
-        })
+            : await (async () => {
+          // Antes de criar, checa se já existe faixa com mesmo título (case-insensitive)
+          // + BPM dentro de ±2 (tolerância de arredondamento).
+          // Se achar → faz UPDATE na existente (evita duplicata).
+          const bpmNum = bpm ?? 0
+
+          const existing = await prisma.track.findFirst({
+            where: {
+              userId: session.user.id,
+              title: { equals: title, mode: 'insensitive' },
+            },
+          })
+
+          if (existing && Math.abs((existing.bpm ?? 0) - bpmNum) <= 2) {
+            // Duplicata detectada — atualiza campos faltantes
+            console.log(`[tracks POST] Duplicata detectada: "${title}" (id=${existing.id}), fazendo update`)
+            return prisma.track.update({
+              where: { id: existing.id },
+              data: {
+                folderId: folderId ?? existing.folderId,
+                segments: segments ?? existing.segments,
+                key: key ?? existing.key,
+                energy: energy ?? existing.energy,
+                durationSec: durationSec ?? existing.durationSec,
+                fileHash: fileHash ?? existing.fileHash,
+              },
+            })
+          }
+
+          // Sem duplicata — cria novo
+          return prisma.track.create({
+            data: {
+              userId: session.user.id,
+              title,
+              artist: artist ?? '',
+              bpm: bpmNum,
+              key: key ?? '',
+              energy: energy ?? 7,
+              durationSec: durationSec ?? 0,
+              firstBeatSec: body.firstBeatSec ?? 0,
+              folderId: folderId ?? null,
+              segments: segments ?? undefined,
+              fileHash: fileHash ?? null,
+            },
+          })
+        })()
 
     return NextResponse.json({ track }, { status: 201 })
   } catch (error) {
