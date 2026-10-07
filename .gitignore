@@ -60,3 +60,4 @@ rekordbox-full.xml
 *.xml
 test-parser.mjs
 scripts/
+*.txt 
