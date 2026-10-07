@@ -52,7 +52,7 @@ export default function SetlistView({
       alert('Não foi possível copiar. Tenta de novo.')
     }
   }
-
+ 
   // Cadeia completa
 const transitions = useMemo(() => {
   if (!analyses || !durations) return []
@@ -1211,7 +1211,7 @@ interface TransitionIssue {
   index: number
   fromTitle: string
   toTitle: string
-  severity: 'critical' | 'warning'
+  severity: 'critical' | 'warning' | 'unknown'
   score: number
   reason: string
 }
@@ -1252,6 +1252,7 @@ function analyzeTransitions(
   issues: TransitionIssue[]
   criticalCount: number
   warningCount: number
+  unknownCount: number  
   avgScore: number
 } {
   const issues: TransitionIssue[] = []
@@ -1269,7 +1270,7 @@ function analyzeTransitions(
         index: i,
         fromTitle: a.title,
         toTitle: b.title,
-        severity: 'critical',
+        severity: 'unknown',
         score: 0,
         reason: 'faixa sem análise estrutural',
       })
@@ -1324,6 +1325,7 @@ function analyzeTransitions(
     issues,
     criticalCount: issues.filter(x => x.severity === 'critical').length,
     warningCount: issues.filter(x => x.severity === 'warning').length,
+    unknownCount: issues.filter(x => x.severity === 'unknown').length,
     avgScore: total > 0 ? Math.round(scoreSum / total) : 0,
   }
 }
@@ -1347,7 +1349,40 @@ function CompatibilityAlert({
 }) {
   const result = analyzeTransitions(setlist, analyses, durations)
 
-  if (result.total === 0) return null
+     if (result.total === 0) return null
+
+  // 🆕 Fase 5.7 — se TODAS as transições são 'unknown', mostrar aviso próprio
+  if (result.unknownCount === result.total) {
+    return (
+      <div style={{
+        padding: '14px 18px',
+        background: 'rgba(124, 92, 252, 0.08)',
+        border: '1px solid rgba(124, 92, 252, 0.35)',
+        borderRadius: 12,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+      }}>
+        <span style={{ fontSize: 20 }}>⏳</span>
+        <div>
+          <p style={{
+            fontSize: 12,
+            color: 'var(--accent)',
+            fontFamily: 'var(--font-mono, monospace)',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            marginBottom: 2,
+          }}>
+            aguardando análise estrutural
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--text)' }}>
+            Nenhuma faixa do set tem análise GPU. Faça upload das {setlist.setlist.length} pra calcular o score real.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const { total, ok, issues, criticalCount, warningCount, avgScore } = result
 
