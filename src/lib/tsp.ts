@@ -35,6 +35,8 @@ export interface TspResult {
   averageScore: number
   worstScore: number
   candidates: number
+  requestedCount: number
+  effectiveCount: number
   elapsedMs: number
   seed: number
 }
@@ -147,7 +149,7 @@ export function diversifyPool(
   setSize: number
 ): Track[] {
 
-  const maxPorLetra = Math.max(1, Math.floor(setSize / 15))
+  const maxPorLetra = Math.max(1, Math.floor(setSize / 10))
 
   // Agrupa por família (só o número, ignora A/B)
   const byFamilia = new Map<string, Track[]>()
@@ -320,18 +322,25 @@ export function generateSmartSet(
 
   // FASE 1.5 — DIVERSIDADE (Regra 3)
   const diversified = diversifyPool(filtered, count)
-  const candidates = diversified.length >= count ? diversified : filtered
 
-  if (candidates.length < count) {
-    return {
-      tracks: [],
-      averageScore: 0,
-      worstScore: 0,
-      candidates: candidates.length,
-      elapsedMs: Date.now() - startTime,
-      seed,
-    }
+// ⚠️ B2: se a diversidade não permite count, REDUZ o count
+// ao máximo que a regra A1 permite. Não volta pra 'filtered
+const effectiveCount = Math.min(count, diversified.length)
+
+if (effectiveCount === 0) {
+  return {
+    tracks: [],
+    averageScore: 0,
+    worstScore: 0,
+    candidates: 0,
+    requestedCount: count,  
+    effectiveCount: 0, 
+    elapsedMs: Date.now() - startTime,
+    seed,
   }
+}
+
+const candidates = diversified
 
   // FASE 2 — MULTI-START
   const rng = mulberry32(seed)
@@ -340,7 +349,7 @@ export function generateSmartSet(
 
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
-    const order = nearestNeighbor(candidates, startIdx, count)
+    const order = nearestNeighbor(candidates, startIdx, effectiveCount)
     const score = scoreOrder(order)
 
     if (score > bestScore) {
@@ -374,6 +383,8 @@ export function generateSmartSet(
     averageScore,
     worstScore: worst,
     candidates: candidates.length,
+    requestedCount: count,
+    effectiveCount,
     elapsedMs: Date.now() - startTime,
     seed,
   }

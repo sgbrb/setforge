@@ -522,6 +522,9 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
       analysis:
         `Setlist gerado por TSP (nearest neighbor + 2-opt + or-opt). ` +
         `${data.tracks.length} faixas de ${data.candidates} candidatas. ` +
+        (data.effectiveCount < data.requestedCount
+           ? `⚠️ Pedido: ${data.requestedCount} faixas · Entregue: ${data.effectiveCount} (limite de diversidade de Camelot). `
+    : '') +
         `Score médio ${data.averageScore}/100, pior ${data.worstScore}/100. ` +
         `Tempo ${data.elapsedMs}ms (${data.attempts} tentativa${data.attempts !== 1 ? 's' : ''}).`,
       djTip:
