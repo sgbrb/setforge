@@ -87,3 +87,10 @@ export function findCompatibleTracks(
     .filter(item => item.score >= minScore)
     .sort((a, b) => b.score - a.score)
 }
+/**
+ * Normaliza título de faixa pra comparação (case-insensitive, trim, espaços colapsados).
+ * Usado pra casar análise GPU com faixas do setlist (upload local vs Track do banco).
+ */
+export function normalizeTitle(s: string): string {
+  return (s || '').toLowerCase().trim().replace(/\s+/g, ' ')
+}

@@ -9,6 +9,7 @@ import SetlistView from '@/components/SetlistView'
 import SmartSetlistModal, { type SmartSetlistFilters } from '@/components/SmartSetlistModal'
 import { computeOptimalOrder, scoreOrder } from '@/lib/optimal-order'
 import { AudioAnalysis } from '@/lib/mix-timeline'
+import { normalizeTitle } from '@/lib/harmonic-utils'
 
 interface QueueStats {
   total: number
@@ -393,6 +394,23 @@ const [smartLoading, setSmartLoading] = useState(false)
   ) => {
     setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
     setDurations(prev => ({ ...prev, [trackId]: durationSec }))
+     // 🆕 Casar com faixa do setlist (por título + BPM)
+  // O upload chega com id temporário (upload-XXXXX). O setlist usa o Track.id real.
+  // Sem isso, a faixa analisada não some da lista "sem análise estrutural".
+  if (setlist) {
+    const uploaded = tracks.find(t => t.id === trackId)
+    if (uploaded) {
+      const match = setlist.setlist.find(st => 
+        normalizeTitle(st.title) === normalizeTitle(uploaded.title) &&
+        Math.abs((st.bpm || 0) - (uploaded.bpm || 0)) <= 2
+      )
+      if (match && match.id !== trackId) {
+        setAnalyses(prev => ({ ...prev, [match.id]: analysis }))
+        setDurations(prev => ({ ...prev, [match.id]: durationSec }))
+        console.log(`[page] Análise casada: "${uploaded.title}" → ${match.id}`)
+      }
+    }
+  }
 
     setTracks(prev => prev.map(t => {
       if (t.id !== trackId) return t
