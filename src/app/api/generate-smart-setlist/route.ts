@@ -270,7 +270,9 @@ export async function POST(req: NextRequest) {
             peakMoment: null,
             totalDuration: `${result.tracks.length} faixas`,
             userId,
-            folderId: body.folderId ?? null,
+            folderId: (typeof body.folderId === 'string' && body.folderId !== 'all')
+              ? body.folderId
+              : null,
             tracks: {
               create: result.tracks.map((t, i) => ({
                 position: i + 1,
@@ -333,7 +335,9 @@ export async function POST(req: NextRequest) {
         peakMoment: null,
         totalDuration: `${lastResult.tracks.length} faixas`,
         userId,
-        folderId: body.folderId ?? null,
+        folderId: (typeof body.folderId === 'string' && body.folderId !== 'all')
+  ? body.folderId
+  : null,
         tracks: {
           create: lastResult.tracks.map((t, i) => ({
             position: i + 1,
