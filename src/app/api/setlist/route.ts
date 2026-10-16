@@ -16,14 +16,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
     }
 
-    const setlist = await prisma.setlist.findFirst({
+    const id = req.nextUrl.searchParams.get('id')
+
+const setlist = id
+  ? await prisma.setlist.findFirst({
+      where: { id, userId: session.user.id },
+      include: { tracks: { orderBy: { position: 'asc' } } },
+    })
+  : await prisma.setlist.findFirst({
       where: { userId: session.user.id },
       orderBy: { createdAt: 'desc' },
-      include: {
-        tracks: {
-          orderBy: { position: 'asc' },
-        },
-      },
+      include: { tracks: { orderBy: { position: 'asc' } } },
     })
 
     if (!setlist) {
