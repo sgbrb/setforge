@@ -61,3 +61,4 @@ rekordbox-full.xml
 test-parser.mjs
 scripts/
 *.txt 
+.vscode/ 

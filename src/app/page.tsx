@@ -513,7 +513,7 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
   bpmRange: filters.bpmRange,
   camelotStrict: filters.camelotStrict,
   setSize: filters.setSize,
-  onlyAnalyzed: filters.onlyAnalyzed,
+  onlyAnalyzed: true,
   folderId: selectedFolderId,
 }),
     })

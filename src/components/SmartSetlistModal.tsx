@@ -31,7 +31,7 @@ export default function SmartSetlistModal({
   )
   const [bpmRange, setBpmRange] = useState<string>('10')
   const [camelotStrict, setCamelotStrict] = useState<boolean>(false)
-  const [onlyAnalyzed, setOnlyAnalyzed] = useState<boolean>(false)
+  const onlyAnalyzed = true
   const [setSize, setSetSize] = useState<string>(String(defaultSetSize))
 
   if (!open) return null
@@ -49,7 +49,7 @@ export default function SmartSetlistModal({
       bpmRange: parsedBpmRange > 0 ? parsedBpmRange : 10,
       camelotStrict,
       setSize: Math.max(1, Math.min(parsedSetSize, 200)),
-      onlyAnalyzed,
+      onlyAnalyzed: true,
     })
   }
 
@@ -201,19 +201,13 @@ export default function SmartSetlistModal({
   }}
   title="⚠️ Só funciona depois que você analisar faixas (Fase 3). Hoje a maioria da biblioteca do XML não tem análise."
 >
-  <input
-    type="checkbox"
-    checked={onlyAnalyzed}
-    onChange={(e) => setOnlyAnalyzed(e.target.checked)}
-    style={{ width: 16, height: 16, cursor: 'pointer', marginTop: 2, flexShrink: 0 }}
-  />
   <span
-    style={{
-      fontSize: 13,
-      color: 'var(--fg)',
-      lineHeight: 1.4,
-    }}
-  >
+  style={{
+    fontSize: 13,
+    color: 'var(--accent)',
+    lineHeight: 1.4,
+  }}
+>
     Só faixas com análise estrutural (crossfade disponível)
     <span
       style={{

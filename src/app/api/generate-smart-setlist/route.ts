@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
   where: {
     userId,
     bpm: { gt: 0 },
-    ...(body.onlyAnalyzed ? { segments: { not: Prisma.DbNull } } : {}),
+    segments: { not: Prisma.DbNull },
     ...(excludedTrackIds.size > 0
       ? { id: { notIn: [...excludedTrackIds] } }
       : {}),
