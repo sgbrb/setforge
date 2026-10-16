@@ -20,6 +20,7 @@ import traceback
 import subprocess
 import json
 import threading
+from energy_detect import detect_energy
 
 # 🔑 FFmpeg (só PATH — NÃO usa add_dll_directory)
 FFMPEG_SHARED_BIN = r"C:\ffmpeg\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
@@ -158,12 +159,19 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
             f"BPM {result.bpm}, {len(result.segments)} segmentos, key {key_camelot or '?'}",
             flush=True,
         )
-
         segments = [{
             "start": round(float(seg.start), 2),
             "end": round(float(seg.end), 2),
             "label": str(seg.label),
         } for seg in result.segments]
+
+        # 🆕 Detecção de energia (rápida, ~2s)
+        energy = None
+        try:
+            energy = detect_energy(tmp_path)
+            print(f"[job {job_id}] Energia: {energy}/10", flush=True)
+        except Exception as e:
+            print(f"[job {job_id}] Aviso: energia falhou: {e}", flush=True)
 
         with JOBS_LOCK:
             JOBS[job_id]["status"] = "done"
@@ -171,7 +179,9 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
                 "bpm": round(float(result.bpm), 2),
                 "key": key_camelot,
                 "segments": segments,
+                "energy": energy,
             }
+        
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[job {job_id}] ERRO: {e}\n{tb}", flush=True)
