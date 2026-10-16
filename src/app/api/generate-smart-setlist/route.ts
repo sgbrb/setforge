@@ -6,8 +6,7 @@ import { Prisma } from '@prisma/client'
 import { generateSmartSet } from '@/lib/tsp'
 import type { Track as FrontendTrack } from '@/lib/types'
 
-const RECENT_SETLISTS_FOR_EXCLUSION = 4   // Regra A — não repetir faixas
-const RECENT_SETLISTS_FOR_EQUALITY = 20   // Regra B — não repetir set igual
+const RECENT_SETLISTS_FOR_EQUALITY = 100   // Regra B — não repetir set igual
 const MAX_RETRIES = 5                     // seeds: base+0, base+1, ..., base+4
 const BASE_SEED = 42
 
