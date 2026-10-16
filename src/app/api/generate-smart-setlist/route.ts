@@ -155,14 +155,28 @@ export async function POST(req: NextRequest) {
     })
 
     // Regra A: pega trackIds dos 4 mais recentes pra excluir
-    const excludedTrackIds = new Set<string>()
-    for (const sl of recentSetlists.slice(0, RECENT_SETLISTS_FOR_EXCLUSION)) {
-      for (const t of sl.tracks) {
-        if (t.trackId && !t.trackId.startsWith('gen-')) {
-          excludedTrackIds.add(t.trackId)
-        }
-      }
+    const SETS_RECENT = 5      // últimos 5
+const SETS_MEDIUM = 20     // 6-20
+const SETS_OLD = 50        // 21-50
+const PENALTY_RECENT = 0.8
+const PENALTY_MEDIUM = 0.5
+const PENALTY_OLD = 0.2
+
+const usagePenalty: Record<string, number> = {}
+for (let i = 0; i < recentSetlists.length; i++) {
+  const setAge = i   // 0 = mais recente
+  let penalty = 0
+  if (setAge < SETS_RECENT) penalty = PENALTY_RECENT
+  else if (setAge < SETS_MEDIUM) penalty = PENALTY_MEDIUM
+  else if (setAge < SETS_OLD) penalty = PENALTY_OLD
+  else continue   // não penaliza
+
+  for (const t of recentSetlists[i].tracks) {
+    if (t.trackId && !t.trackId.startsWith('gen-')) {
+      usagePenalty[t.trackId] = Math.max(usagePenalty[t.trackId] ?? 0, penalty)
     }
+  }
+}
 
     // Regra B: assinaturas dos 20 últimos pra comparar
     const recentSignatures = recentSetlists.map(sl =>
@@ -175,9 +189,7 @@ export async function POST(req: NextRequest) {
     userId,
     bpm: { gt: 0 },
     segments: { not: Prisma.DbNull },
-    ...(excludedTrackIds.size > 0
-      ? { id: { notIn: [...excludedTrackIds] } }
-      : {}),
+    
   },
       select: {
         id: true,
@@ -233,6 +245,7 @@ export async function POST(req: NextRequest) {
         seed,
         multiStart: 100,
         twoOptPasses: 2,
+        usagePenalty,
       })
 
       if (result.tracks.length === 0) {

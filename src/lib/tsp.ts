@@ -28,6 +28,7 @@ export interface TspOptions {
   seed?: number
   multiStart?: number
   twoOptPasses?: number
+  usagePenalty?: Record<string, number>
 }
 
 export interface TspResult {
@@ -183,7 +184,8 @@ export function diversifyPool(
 function nearestNeighbor(
   pool: Track[],
   startIdx: number,
-  count: number
+  count: number,
+  usagePenalty?: Record<string, number>
 ): Track[] {
   if (pool.length === 0) return []
   if (pool.length <= count) return [...pool]
@@ -197,7 +199,7 @@ function nearestNeighbor(
     let bestScore = -1
 
     for (let i = 0; i < remaining.length; i++) {
-      const score = getTransitionScore(last, remaining[i])
+      const score = getTransitionScore(last, remaining[i], usagePenalty)
       if (score > bestScore) {
         bestScore = score
         bestIdx = i
@@ -215,21 +217,25 @@ function nearestNeighbor(
 // FASE 3 — REFINAMENTO: 2-OPT
 // ============================================================
 
-function scoreOrder(tracks: Track[]): number {
+function scoreOrder(tracks: Track[], usagePenalty?: Record<string, number>): number {
   if (tracks.length <= 1) return 0
   let total = 0
   for (let i = 0; i < tracks.length - 1; i++) {
-    total += getTransitionScore(tracks[i], tracks[i + 1])
+    total += getTransitionScore(tracks[i], tracks[i + 1], usagePenalty)
   }
   return total
 }
 
-function twoOpt(tracks: Track[], passes: number): Track[] {
+function twoOpt(
+  tracks: Track[],
+  passes: number,
+usagePenalty?: Record<string, number>
+): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best)
+  let bestScore = scoreOrder(best, usagePenalty)
 
   for (let pass = 0; pass < passes; pass++) {
     let improved = false
@@ -241,7 +247,7 @@ function twoOpt(tracks: Track[], passes: number): Track[] {
           ...best.slice(i + 1, j + 1).reverse(),
           ...best.slice(j + 1),
         ]
-        const candidateScore = scoreOrder(candidate)
+        const candidateScore = scoreOrder(candidate, usagePenalty)
 
         if (candidateScore > bestScore) {
           best = candidate
@@ -261,12 +267,16 @@ function twoOpt(tracks: Track[], passes: number): Track[] {
 // FASE 4 — REFINAMENTO: OR-OPT
 // ============================================================
 
-function orOpt(tracks: Track[], maxBlockSize: number = 3): Track[] {
+function orOpt(
+  tracks: Track[],
+  maxBlockSize: number = 3,
+  usagePenalty?: Record<string, number>
+): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best)
+  let bestScore = scoreOrder(best, usagePenalty)
   let improved = true
 
   while (improved) {
@@ -279,7 +289,7 @@ function orOpt(tracks: Track[], maxBlockSize: number = 3): Track[] {
 
         for (let j = 0; j < rest.length; j++) {
           const candidate = [...rest.slice(0, j), ...block, ...rest.slice(j)]
-          const candidateScore = scoreOrder(candidate)
+          const candidateScore = scoreOrder(candidate, usagePenalty)
 
           if (candidateScore > bestScore) {
             best = candidate
@@ -311,6 +321,7 @@ export function generateSmartSet(
   const seed = options.seed ?? 42
   const multiStart = options.multiStart ?? 100
   const twoOptPasses = options.twoOptPasses ?? 2
+  const usagePenalty = options.usagePenalty
 
   // FASE 1 — PRÉ-FILTRO
     const filtered = filterCandidates(
@@ -349,8 +360,8 @@ const candidates = diversified
 
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
-    const order = nearestNeighbor(candidates, startIdx, effectiveCount)
-    const score = scoreOrder(order)
+    const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty)
+    const score = scoreOrder(order, usagePenalty)
 
     if (score > bestScore) {
       bestScore = score
@@ -359,17 +370,17 @@ const candidates = diversified
   }
 
   // FASE 3 — 2-OPT
-  bestOrder = twoOpt(bestOrder, twoOptPasses)
-  bestScore = scoreOrder(bestOrder)
+  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty)
+  bestScore = scoreOrder(bestOrder, usagePenalty)
 
   // FASE 4 — OR-OPT
-  bestOrder = orOpt(bestOrder, 3)
-  bestScore = scoreOrder(bestOrder)
+  bestOrder = orOpt(bestOrder, 3, usagePenalty)
+  bestScore = scoreOrder(bestOrder, usagePenalty)
 
   // MÉTRICAS
   let worst = 100
   for (let i = 0; i < bestOrder.length - 1; i++) {
-    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1])
+    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], usagePenalty)
     if (s < worst) worst = s
   }
 

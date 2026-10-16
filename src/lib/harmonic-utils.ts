@@ -62,11 +62,25 @@ export function getBpmCompatibility(bpmA: number, bpmB: number): number {
  * Score combinado de transição (0-100)
  * Peso: 60% Camelot, 40% BPM
  */
-export function getTransitionScore(trackA: Track, trackB: Track): number {
+export function getTransitionScore(
+  trackA: Track,
+  trackB: Track,
+  usagePenalty?: Record<string, number>
+): number {
   const camelot = getCamelotCompatibility(trackA.key, trackB.key)
   const bpm = getBpmCompatibility(trackA.bpm, trackB.bpm)
 
-  return Math.round(camelot * 0.6 + bpm * 0.4)
+  const baseScore = camelot * 0.6 + bpm * 0.4
+
+  // Penalidade: média das 2 faixas (se ambas foram usadas recentemente, penaliza mais)
+  if (usagePenalty) {
+    const pA = usagePenalty[trackA.id] ?? 0
+    const pB = usagePenalty[trackB.id] ?? 0
+    const avg = (pA + pB) / 2
+    return Math.round(baseScore * (1 - avg))
+  }
+
+  return Math.round(baseScore)
 }
 
 /**
