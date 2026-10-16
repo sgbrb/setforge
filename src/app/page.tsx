@@ -10,6 +10,7 @@ import SmartSetlistModal, { type SmartSetlistFilters } from '@/components/SmartS
 import { computeOptimalOrder, scoreOrder } from '@/lib/optimal-order'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 import { normalizeTitle } from '@/lib/harmonic-utils'
+import SetlistHistory from '@/components/SetlistHistory'
 
 interface QueueStats {
   total: number
@@ -51,6 +52,7 @@ const [smartLoading, setSmartLoading] = useState(false)
 
     const [importingXml, setImportingXml] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [activeTab, setActiveTab] = useState<'library' | 'history'>('library')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 🔒 Redireciona se não estiver logado
@@ -565,6 +567,25 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
   }
 }
 
+  const handleOpenSetlist = async (setlistId: string) => {
+    try {
+      const res = await fetch(`/api/setlist?id=${encodeURIComponent(setlistId)}`)
+      if (!res.ok) {
+        alert('Erro ao abrir setlist')
+        return
+      }
+      const data = await res.json()
+      if (!data.id) {
+        alert('Setlist não encontrado')
+        return
+      }
+      setSetlist(data)
+      setActiveTab('library')
+    } catch (err) {
+      console.error('[page] Erro ao abrir setlist:', err)
+      alert('Erro ao abrir setlist')
+    }
+  }
   // 🎼 Gera setlist via IA
   const generate = async () => {
     // 🆕 Guarda-corpo: só gera se for pasta real
@@ -646,6 +667,39 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
           <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>gerador de set list</p>
         </div>
 
+        <div style={{ display: 'flex', gap: 8, marginLeft: 24 }}>
+  <button
+    onClick={() => setActiveTab('library')}
+    style={{
+      padding: '6px 14px',
+      borderRadius: 8,
+      border: activeTab === 'library' ? '1px solid var(--accent)' : '1px solid var(--border)',
+      background: activeTab === 'library' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
+      color: activeTab === 'library' ? 'var(--accent)' : 'var(--muted)',
+      fontSize: 12,
+      fontFamily: 'var(--font-mono, monospace)',
+      cursor: 'pointer',
+    }}
+  >
+    biblioteca
+  </button>
+  <button
+    onClick={() => setActiveTab('history')}
+    style={{
+      padding: '6px 14px',
+      borderRadius: 8,
+      border: activeTab === 'history' ? '1px solid var(--accent)' : '1px solid var(--border)',
+      background: activeTab === 'history' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
+      color: activeTab === 'history' ? 'var(--accent)' : 'var(--muted)',
+      fontSize: 12,
+      fontFamily: 'var(--font-mono, monospace)',
+      cursor: 'pointer',
+    }}
+  >
+    meus sets
+  </button>
+</div>
+
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
@@ -720,6 +774,12 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
         </aside>
 
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {activeTab === 'history' ? (
+            <Panel title="meus sets">
+              <SetlistHistory onOpen={handleOpenSetlist} />
+            </Panel>
+          ) : (
+            <>
           <Panel title="biblioteca de músicas" badge={libraryBadge}>
             <TrackUpload
               onAddTrack={addTrack}
@@ -842,6 +902,8 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
                 />
               )}
             </Panel>
+          )}       
+                    </>
           )}
         </main>
       </div>
