@@ -15,31 +15,23 @@ try:
     LIBROSA_AVAILABLE = True
 except ImportError:
     LIBROSA_AVAILABLE = False
-    print("[energy_detect] AVISO: librosa não instalada. Rode: pip install librosa", flush=True)
+    print("[energy_detect] AVISO: librosa não instalada.", flush=True)
 
 
 def detect_energy(audio_path: str, sr=22050) -> float:
     """
     Calcula a energia de uma faixa (0-10).
-
-    Args:
-        audio_path: caminho do arquivo de áudio
-        sr: sample rate (22050 é ok pra análise)
-
-    Returns:
-        energia (float, 0-10)
     """
     if not LIBROSA_AVAILABLE:
-        return 5.0  # fallback neutro
+        return 5.0
 
     try:
-        # Carrega o áudio (mono, sr reduzido = rápido)
         y, sr = librosa.load(audio_path, sr=sr, mono=True)
 
         if len(y) == 0:
             return 5.0
 
-        # 1. RMS — volume médio (0-1)
+        # 1. RMS — volume médio
         rms = float(librosa.feature.rms(y=y)[0].mean())
 
         # 2. Spectral centroid — "brilho" (Hz)
@@ -52,24 +44,22 @@ def detect_energy(audio_path: str, sr=22050) -> float:
         # 4. Zero crossing rate — percussividade
         zcr = float(librosa.feature.zero_crossing_rate(y)[0].mean())
 
-        # Normalização (empírica — ajustar depois com dados reais)
-        rms_norm = min(rms / 0.15, 1.0)          # RMS típico: 0.05-0.15
-        centroid_norm = min(centroid / 3500.0, 1.0)  # 1kHz-3.5kHz
-        flux_norm = min(flux / 50.0, 1.0)
-        zcr_norm = min(zcr / 0.15, 1.0)
+        # print(f"[DEBUG] rms={rms:.4f} centroid={centroid:.1f} flux={flux:.2f} zcr={zcr:.4f}")
+
+        rms_norm = min(rms / 0.25, 1.0)          # volta pra 0.25 (não importa muito)
+        centroid_norm = min(centroid / 4000.0, 1.0)  # calibra pro range real (750-3790)
+        flux_norm = min(flux / 120.0, 1.0)       # calibra pro range real (55-88)
+        zcr_norm = min(zcr / 0.20, 1.0)          # calibra pro range real (0.03-0.19)
 
         # Fórmula (pesos empíricos)
         energy_0_1 = (
-            0.45 * rms_norm +
-            0.25 * centroid_norm +
-            0.20 * flux_norm +
-            0.10 * zcr_norm
+        0.05 * rms_norm +
+        0.35 * centroid_norm +
+        0.10 * flux_norm +
+        0.50 * zcr_norm
         )
 
-        # Converte pra 0-10
         energy = round(energy_0_1 * 10, 2)
-
-        # Clamp 0-10
         return max(0.0, min(10.0, energy))
 
     except Exception as e:
@@ -77,7 +67,6 @@ def detect_energy(audio_path: str, sr=22050) -> float:
         return 5.0
 
 
-# Teste rápido (só roda se executar direto o arquivo)
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:

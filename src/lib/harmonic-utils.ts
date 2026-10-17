@@ -62,17 +62,62 @@ export function getBpmCompatibility(bpmA: number, bpmB: number): number {
  * Score combinado de transição (0-100)
  * Peso: 60% Camelot, 40% BPM
  */
+/**
+ * Energia alvo pra posição `position` (1-indexed) num set de `total` faixas.
+ *
+ * Curva padrão:
+ *   0-17%:   aquecer  → 4
+ *   18-50%:  subir    → 6
+ *   51-83%:  pico     → 9
+ *   84-100%: descer   → 6
+ */
+export function getTargetEnergy(position: number, total: number): number {
+  if (total <= 0) return 6
+  const pct = position / total
+  if (pct < 0.17) return 4
+  if (pct < 0.50) return 6
+  if (pct < 0.83) return 9
+  return 6
+}
+
+/**
+ * Compatibilidade entre energia da faixa e alvo da posição.
+ * - diff ≤ 1.0 → 100
+ * - diff ≤ 2.0 → 80
+ * - diff ≤ 3.0 → 60
+ * - diff > 3.0 → 30
+ * - sem energia → 60 (neutro, não penaliza)
+ */
+export function getEnergyCompatibility(
+  trackEnergy: number | undefined,
+  targetEnergy: number
+): number {
+  if (!trackEnergy || trackEnergy <= 0) return 60
+  const diff = Math.abs(trackEnergy - targetEnergy)
+  if (diff <= 1.0) return 100
+  if (diff <= 2.0) return 80
+  if (diff <= 3.0) return 60
+  return 30
+}
+
 export function getTransitionScore(
   trackA: Track,
   trackB: Track,
+  position: number = 0,
+  total: number = 30,
   usagePenalty?: Record<string, number>
 ): number {
   const camelot = getCamelotCompatibility(trackA.key, trackB.key)
   const bpm = getBpmCompatibility(trackA.bpm, trackB.bpm)
 
-  const baseScore = camelot * 0.6 + bpm * 0.4
+  // Energia-alvo da próxima posição (trackB vai entrar aqui)
+  const targetEnergy = getTargetEnergy(position + 1, total)
+  const energyB = (trackB as any).energy
+  const energyCompat = getEnergyCompatibility(energyB, targetEnergy)
 
-  // Penalidade: média das 2 faixas (se ambas foram usadas recentemente, penaliza mais)
+  // Score final: 45% Camelot + 25% BPM + 30% Energia
+  const baseScore = camelot * 0.45 + bpm * 0.25 + energyCompat * 0.30
+
   if (usagePenalty) {
     const pA = usagePenalty[trackA.id] ?? 0
     const pB = usagePenalty[trackB.id] ?? 0

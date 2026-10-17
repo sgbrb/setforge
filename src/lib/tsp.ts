@@ -199,7 +199,7 @@ function nearestNeighbor(
     let bestScore = -1
 
     for (let i = 0; i < remaining.length; i++) {
-      const score = getTransitionScore(last, remaining[i], usagePenalty)
+      const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty)
       if (score > bestScore) {
         bestScore = score
         bestIdx = i
@@ -220,8 +220,9 @@ function nearestNeighbor(
 function scoreOrder(tracks: Track[], usagePenalty?: Record<string, number>): number {
   if (tracks.length <= 1) return 0
   let total = 0
+  const N = tracks.length
   for (let i = 0; i < tracks.length - 1; i++) {
-    total += getTransitionScore(tracks[i], tracks[i + 1], usagePenalty)
+    total += getTransitionScore(tracks[i], tracks[i + 1], i, N, usagePenalty)
   }
   return total
 }
@@ -380,7 +381,7 @@ const candidates = diversified
   // MÉTRICAS
   let worst = 100
   for (let i = 0; i < bestOrder.length - 1; i++) {
-    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], usagePenalty)
+    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], i, bestOrder.length, usagePenalty)
     if (s < worst) worst = s
   }
 

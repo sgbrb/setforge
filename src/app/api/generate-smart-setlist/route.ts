@@ -200,6 +200,7 @@ for (let i = 0; i < recentSetlists.length; i++) {
         energy: true,
         durationSec: true,
         firstBeatSec: true,
+        segments: true, 
       },
     })
 
@@ -214,18 +215,20 @@ for (let i = 0; i < recentSetlists.length; i++) {
     }
 
     // 4. Converte Prisma.Track → types.Track
-    const library: FrontendTrack[] = prismaTracks.map(t => ({
-      id: t.id,
-      folderId: t.folderId,
-      title: t.title,
-      artist: t.artist,
-      bpm: t.bpm,
-      key: t.key,
-      energy: t.energy,
-      firstBeatSec: t.firstBeatSec,
-      durationMs:
-        t.durationSec > 0 ? Math.round(t.durationSec * 1000) : undefined,
-    }))
+   const library: FrontendTrack[] = prismaTracks.map(t => {
+  const segs = t.segments as any
+  return {
+    id: t.id,
+    folderId: t.folderId,
+    title: t.title,
+    artist: t.artist,
+    bpm: t.bpm,
+    key: t.key,
+    energy: segs?.energy ?? 0,   // ← extrai de segments.energy
+    firstBeatSec: t.firstBeatSec,
+    durationMs: t.durationSec > 0 ? Math.round(t.durationSec * 1000) : undefined,
+  }
+})
 
     // 5. Loop de retry (Regra B1 — até 5 seeds diferentes)
     let lastResult: ReturnType<typeof generateSmartSet> | null = null
