@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { jsPDF } from 'jspdf'
 import { GeneratedSetlist, Track, Folder } from '@/lib/types'
 import {
   MixTimeline,
@@ -126,7 +127,106 @@ const transitions = useMemo(() => {
 
     return map
   }, [transitions, analyses, durations, allTracks, allFolders, setlist])
+  const exportPdf = async () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      })
 
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const pageHeight = doc.internal.pageSize.getHeight()
+      const margin = 15
+      const lineHeight = 7
+      let y = margin
+
+      // ─── Header ──────────────────────────────
+      doc.setFontSize(20)
+      doc.setFont('helvetica', 'bold')
+      doc.text('SETFORGE — SET LIST', margin, y)
+      y += 8
+
+      doc.setFontSize(12)
+      doc.setFont('helvetica', 'normal')
+      const dateStr = new Date().toLocaleDateString('pt-BR')
+      doc.text(`${setlist.setlist.length} faixas · gerado em ${dateStr}`, margin, y)
+      y += 4
+
+      // Linha separadora
+      doc.setDrawColor(180, 180, 180)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 6
+
+      // ─── Análise (se tiver) ──────────────────
+      if (setlist.analysis) {
+        doc.setFontSize(9)
+        doc.setTextColor(100, 100, 100)
+        const analysisLines = doc.splitTextToSize(setlist.analysis, pageWidth - 2 * margin)
+        doc.text(analysisLines, margin, y)
+        y += analysisLines.length * 3.5 + 4
+      }
+
+      // ─── Lista de faixas ─────────────────────
+      doc.setTextColor(0, 0, 0)
+      doc.setFontSize(10)
+
+      for (let i = 0; i < setlist.setlist.length; i++) {
+        const track = setlist.setlist[i]
+
+        // Se tá perto do fim da página, cria nova
+        if (y > pageHeight - margin - 12) {
+          doc.addPage()
+          y = margin
+        }
+
+        // Número + título
+        doc.setFont('helvetica', 'bold')
+        const num = String(i + 1).padStart(2, '0')
+        doc.text(`${num}.`, margin, y)
+
+        doc.setFont('helvetica', 'normal')
+        const titleText = track.title.length > 80 
+          ? track.title.slice(0, 77) + '...' 
+          : track.title
+        doc.text(titleText, margin + 8, y)
+        y += 4
+
+        // Linha 2: BPM, tom, energia
+        doc.setFontSize(8)
+        doc.setTextColor(100, 100, 100)
+        const details: string[] = []
+        if (track.bpm) details.push(`${track.bpm} BPM`)
+        if (track.key) details.push(`${track.key}`)
+        if (track.energy) details.push(`energia ${track.energy}/10`)
+        doc.text(details.join(' · '), margin + 8, y)
+        doc.setTextColor(0, 0, 0)
+        doc.setFontSize(10)
+
+        y += 6
+      }
+
+      // ─── Footer ──────────────────────────────
+      y += 4
+      if (y < pageHeight - margin - 8) {
+        doc.setDrawColor(180, 180, 180)
+        doc.line(margin, y, pageWidth - margin, y)
+        y += 5
+        doc.setFontSize(8)
+        doc.setTextColor(120, 120, 120)
+        doc.text('Gerado por SetForge', margin, y)
+      }
+
+      // Salva
+      const filename = `setforge-${dateStr.replace(/\//g, '-')}.pdf`
+      doc.save(filename)
+
+      console.log(`[SetlistView] PDF exportado: ${filename}`)
+    } catch (err) {
+      console.error('[SetlistView] Erro no PDF:', err)
+      alert('Erro ao gerar PDF. Tenta de novo.')
+    }
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
@@ -406,6 +506,27 @@ const transitions = useMemo(() => {
           📥 exportar pro Rekordbox
         </button>
       )}
+      {/* 🆕 Fase B — exportar PDF */}
+<button
+  onClick={exportPdf}
+  style={{
+    padding: '12px 20px',
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    color: 'var(--text)',
+    fontFamily: 'inherit',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  }}
+>
+  📄 exportar PDF
+</button>
 
       {/* REGENERAR */}
       {onRegenerate && (
