@@ -12,6 +12,7 @@ import {
   calculateFullTimeline,
   discoverMixPoints,
 } from '@/lib/mix-timeline'
+import { analyzeTransitions, type TransitionIssue } from '@/lib/setlist-analysis'
 import CompatibilityMatrix from './CompatibilityMatrix'
 import ExportRekordboxModal from './ExportRekordboxModal'
 import EnergyCurveChart from './EnergyCurveChart'
@@ -1397,129 +1398,6 @@ function Instruction({
 // ============================================================
 // CompatibilityAlert (recalibrado com score)
 // ============================================================
-
-interface TransitionIssue {
-  index: number
-  fromTitle: string
-  toTitle: string
-  severity: 'critical' | 'warning' | 'unknown'
-  score: number
-  reason: string
-}
-
-function camelotCompatibility(
-  keyA: string,
-  keyB: string
-): 'perfect' | 'good' | 'humor' | 'bad' | 'unknown' {
-  const a = keyA ? keyA.trim().match(/^(\d{1,2})\s*([AB])$/i) : null
-  const b = keyB ? keyB.trim().match(/^(\d{1,2})\s*([AB])$/i) : null
-  if (!a || !b) return 'unknown'
-
-  const numA = parseInt(a[1], 10)
-  const numB = parseInt(b[1], 10)
-  const letA = a[2].toUpperCase()
-  const letB = b[2].toUpperCase()
-
-  if (numA === numB && letA === letB) return 'perfect'
-
-  if (letA === letB) {
-    const diff = Math.abs(numA - numB)
-    const wrapDiff = Math.min(diff, 12 - diff)
-    if (wrapDiff === 1 || wrapDiff === 2) return 'good'
-  }
-
-  if (numA === numB && letA !== letB) return 'humor'
-
-  return 'bad'
-}
-
-function analyzeTransitions(
-  setlist: GeneratedSetlist,
-  analyses: Record<string, AudioAnalysis>,
-  durations: Record<string, number>
-): {
-  total: number
-  ok: number
-  issues: TransitionIssue[]
-  criticalCount: number
-  warningCount: number
-  unknownCount: number  
-  avgScore: number
-} {
-  const issues: TransitionIssue[] = []
-  let total = 0
-  let ok = 0
-  let scoreSum = 0
-
-  for (let i = 0; i < setlist.setlist.length - 1; i++) {
-    const a = setlist.setlist[i]
-    const b = setlist.setlist[i + 1]
-    total++
-
-    if (!analyses[a.id] || !analyses[b.id]) {
-      issues.push({
-        index: i,
-        fromTitle: a.title,
-        toTitle: b.title,
-        severity: 'unknown',
-        score: 0,
-        reason: 'faixa sem análise estrutural',
-      })
-      continue
-    }
-
-    // Score simplificado
-    let score = 0
-    const reasons: string[] = []
-
-    const bpmA = a.bpm || 0
-    const bpmB = b.bpm || 0
-    if (bpmA > 0 && bpmB > 0) {
-      const diff = Math.abs(bpmA - bpmB)
-      if (diff <= 3) score += 20
-      else if (diff <= 6) score += 10
-      if (diff > 10) reasons.push(`BPM salta ${bpmA} → ${bpmB}`)
-    }
-
-    const camelot = camelotCompatibility(a.key || '', b.key || '')
-    if (camelot === 'perfect') score += 30
-    else if (camelot === 'good') score += 20
-    else if (camelot === 'humor') score += 15
-    else if (camelot === 'bad') reasons.push(`Camelot ${a.key} → ${b.key} distante`)
-
-    // Score mínimo de estrutura
-    score += 20   // assume saída + entrada
-
-    scoreSum += score
-
-    let worstSeverity: 'ok' | 'warning' | 'critical' = 'ok'
-    if (score < 40) worstSeverity = 'critical'
-    else if (score < 60) worstSeverity = 'warning'
-
-    if (worstSeverity === 'ok') {
-      ok++
-    } else {
-      issues.push({
-        index: i,
-        fromTitle: a.title,
-        toTitle: b.title,
-        severity: worstSeverity,
-        score,
-        reason: reasons.join(' · ') || 'score baixo',
-      })
-    }
-  }
-
-  return {
-    total,
-    ok,
-    issues,
-    criticalCount: issues.filter(x => x.severity === 'critical').length,
-    warningCount: issues.filter(x => x.severity === 'warning').length,
-    unknownCount: issues.filter(x => x.severity === 'unknown').length,
-    avgScore: total > 0 ? Math.round(scoreSum / total) : 0,
-  }
-}
 
 interface SuggestionEntry {
   track: Track
