@@ -15,6 +15,7 @@ import {
 import CompatibilityMatrix from './CompatibilityMatrix'
 import ExportRekordboxModal from './ExportRekordboxModal'
 import EnergyCurveChart from './EnergyCurveChart'
+import HarmonyCurveChart from './HarmonyCurveChart'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -332,7 +333,10 @@ const transitions = useMemo(() => {
     totalPositions={setlist.setlist.length}
   />
 )}
-
+<HarmonyCurveChart 
+  tracks={setlist.setlist}
+  totalPositions={setlist.setlist.length}
+/>
       {/* ANÁLISE GERAL DO SET */}
       {setlist.analysis && (
         <div>
