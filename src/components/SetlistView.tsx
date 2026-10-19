@@ -13,6 +13,7 @@ import {
 } from '@/lib/mix-timeline'
 import CompatibilityMatrix from './CompatibilityMatrix'
 import ExportRekordboxModal from './ExportRekordboxModal'
+import EnergyCurveChart from './EnergyCurveChart'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -187,6 +188,14 @@ const transitions = useMemo(() => {
           suggestions={suggestions}
         />
       )}
+
+      {/* 🆕 Fase 7c — Gráfico de energia */}
+{setlist.setlist.length > 0 && (
+  <EnergyCurveChart 
+    tracks={setlist.setlist}
+    totalPositions={setlist.setlist.length}
+  />
+)}
 
       {/* ANÁLISE GERAL DO SET */}
       {setlist.analysis && (
