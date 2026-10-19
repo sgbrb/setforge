@@ -227,6 +227,42 @@ const transitions = useMemo(() => {
       alert('Erro ao gerar PDF. Tenta de novo.')
     }
   }
+    const exportM3U = () => {
+    try {
+      const lines: string[] = ['#EXTM3U']
+
+      for (const track of setlist.setlist) {
+        // Duração estimada (se não tiver, usa 5 min)
+        const durationSec = 300  // fallback fixo (5 min)
+        const mins = Math.floor(durationSec / 60)
+        const secs = durationSec % 60
+
+        // Nome do arquivo (deriva do title)
+        const filename = track.title.includes('.mp3') ? track.title : `${track.title}.mp3`
+        const fullPath = `E:\\pn_\\${filename}`
+
+        lines.push(`#EXTINF:${mins * 60 + secs},${track.title}`)
+        lines.push(fullPath)
+      }
+
+      // Cria blob e força download
+      const content = lines.join('\n')
+      const blob = new Blob([content], { type: 'audio/x-mpegurl' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `setforge-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.m3u`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      console.log(`[SetlistView] M3U exportado: ${lines.length - 1} faixas`)
+    } catch (err) {
+      console.error('[SetlistView] Erro no M3U:', err)
+      alert('Erro ao gerar M3U. Tenta de novo.')
+    }
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
@@ -525,6 +561,27 @@ const transitions = useMemo(() => {
     gap: 8,
   }}
 >
+  {/* 🆕 Fase B.2 — exportar M3U */}
+<button
+  onClick={exportM3U}
+  style={{
+    padding: '12px 20px',
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    color: 'var(--text)',
+    fontFamily: 'inherit',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  }}
+>
+  🎵 exportar M3U
+</button>
   📄 exportar PDF
 </button>
 
