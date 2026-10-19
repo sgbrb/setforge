@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { generateSmartSet } from '@/lib/tsp'
+import { autoFixSetlist } from '@/lib/setlist-auto-fix'
 import type { Track as FrontendTrack } from '@/lib/types'
 
 const RECENT_SETLISTS_FOR_EQUALITY = 100   // Regra B — não repetir set igual
@@ -235,6 +236,29 @@ for (let i = 0; i < recentSetlists.length; i++) {
     let lastSignature: ReturnType<typeof buildSetlistSignature> | null = null
     let attemptUsed = 0
 
+    // 🆕 Prepara dados pro auto-fix (UMA VEZ, fora do loop)
+const allTracksWithSegments = await prisma.track.findMany({
+  where: {
+    userId,
+    segments: { not: Prisma.DbNull },
+  },
+  select: {
+    id: true,
+    durationSec: true,
+    segments: true,
+  },
+})
+
+const analyses: Record<string, any> = {}
+const durations: Record<string, number> = {}
+
+for (const t of allTracksWithSegments) {
+  if (t.segments) {
+    analyses[t.id] = t.segments
+    durations[t.id] = t.durationSec ?? 0
+  }
+}
+
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const seed = baseSeed + attempt
       attemptUsed = attempt + 1
@@ -271,7 +295,29 @@ for (let i = 0; i < recentSetlists.length; i++) {
         signaturesMatch(sig, signature)
       )
 
-           if (!isDuplicate) {
+                if (!isDuplicate) {
+        // 🆕 Auto-fix: tenta zerar transições ruins (até 3 iterações)
+        let finalTracks = result.tracks
+        let fixIterations = 1
+        let fixScore = result.averageScore
+
+        try {
+          const fixResult = await autoFixSetlist(
+            result.tracks,
+            analyses,
+            durations,
+            prisma,
+            userId,
+            3
+          )
+          finalTracks = fixResult.tracks
+          fixIterations = fixResult.iterations
+          fixScore = fixResult.finalScore
+          console.log(`[auto-fix] ${fixIterations} iterações · score final ${fixScore}`)
+        } catch (err) {
+          console.warn('[auto-fix] Falhou, usando set original:', err)
+        }
+
         // Achou um set único — salva no banco + retorna
         const savedSetlist = await prisma.setlist.create({
           data: {
@@ -280,16 +326,16 @@ for (let i = 0; i < recentSetlists.length; i++) {
             duration: 'auto',
             energyCurve: 'auto',
             audience: null,
-            analysis: `Setlist gerado por TSP · score médio ${result.averageScore}/100 · pior ${result.worstScore}/100 · ${attemptUsed} tentativa(s)`,
+            analysis: `Setlist gerado por TSP · score médio ${fixScore}/100 · ${fixIterations} iteração(ões) auto-fix · ${attemptUsed} tentativa(s)`,
             djTip: null,
             peakMoment: null,
-            totalDuration: `${result.tracks.length} faixas`,
+            totalDuration: `${finalTracks.length} faixas`,
             userId,
             folderId: (typeof body.folderId === 'string' && body.folderId !== 'all')
               ? body.folderId
               : null,
             tracks: {
-              create: result.tracks.map((t, i) => ({
+              create: finalTracks.map((t, i) => ({
                 position: i + 1,
                 trackId: t.id,
                 title: t.title,
@@ -305,8 +351,8 @@ for (let i = 0; i < recentSetlists.length; i++) {
 
         return NextResponse.json({
           id: savedSetlist.id,
-          tracks: result.tracks,
-          averageScore: result.averageScore,
+          tracks: finalTracks,
+          averageScore: fixScore,
           worstScore: result.worstScore,
           candidates: result.candidates,
           requestedCount: result.requestedCount,
@@ -314,6 +360,7 @@ for (let i = 0; i < recentSetlists.length; i++) {
           elapsedMs: result.elapsedMs,
           seed: result.seed,
           attempts: attemptUsed,
+          autoFixIterations: fixIterations,
           duplicate: false,
           filters: {
             bpmTarget,
@@ -323,7 +370,6 @@ for (let i = 0; i < recentSetlists.length; i++) {
           },
         })
       }
-
       // Guarda pra caso todas as tentativas falhem
       lastResult = result
       lastSignature = signature
