@@ -50,6 +50,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json()
+    // 🆕 Se fileHash foi passado, checa duplicata
+  if (body.fileHash) {
+    const existing = await prisma.track.findFirst({
+      where: { fileHash: body.fileHash, userId: session.user.id },
+      select: { id: true, title: true },
+    })
+    if (existing) {
+      return NextResponse.json({ 
+        error: 'already_exists', 
+        existing: { id: existing.id, title: existing.title }
+      }, { status: 409 })
+    }
+  }
     const { id, title, artist, bpm, key, energy, durationSec, folderId, segments, fileHash } = body
 
     if (!title || typeof title !== 'string') {

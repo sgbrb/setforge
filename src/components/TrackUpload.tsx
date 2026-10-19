@@ -7,7 +7,7 @@ import { findCompatibleTracks } from '@/lib/harmonic-utils'
 import { AudioAnalysis } from '@/lib/mix-timeline'
 
 interface TrackUploadProps {
-  onAddTrack?: (track: Track, durationSec?: number) => void
+  onAddTrack?: (track: Track, durationSec?: number,fileHash?: string | null) => void
   onAddAnalysis?: (trackId: string, analysis: AudioAnalysis, durationSec: number) => void
   onQueueChange?: (stats: {
     total: number
@@ -65,9 +65,40 @@ export default function TrackUpload({
     })
   }, [queue])
 
-  const processItem = async (item: QueueItem) => {
+  async function computeFileHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+    const processItem = async (item: QueueItem) => {
     setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'analyzing-bpm' } : q))
 
+      // 🆕 Fase A — calcula hash e checa duplicata ANTES de criar
+  let fileHash: string | null = null
+  try {
+    fileHash = await computeFileHash(item.file)
+  } catch (e) {
+    console.warn('[TrackUpload] Hash falhou:', e)
+  }
+
+  if (fileHash) {
+    try {
+      const checkRes = await fetch(`/api/tracks/check-hash?hash=${encodeURIComponent(fileHash)}`)
+      if (checkRes.ok) {
+        const data = await checkRes.json()
+        if (data.exists) {
+          setQueue(prev => prev.map(q => q.id === item.id
+            ? { ...q, status: 'error', error: `Já na biblioteca: "${data.title}"` }
+            : q
+          ))
+          return  // ← não cria faixa
+        }
+      }
+    } catch (e) {
+      console.warn('[TrackUpload] Check falhou:', e)
+    }
+  }
     let detectedBpm: number | null = null
     let firstBeatSec = 0   // 
     let durationSec = 0
@@ -125,7 +156,7 @@ await audioContext.close()
     }
 
     // 🔧 Passa o durationSec para o POST já salvar no banco
-    if (onAddTrack) onAddTrack(newTrack, durationSec)
+    if (onAddTrack) onAddTrack(newTrack, durationSec, fileHash)
 
     setQueue(prev => prev.map(q => q.id === item.id
       ? { ...q, status: 'analyzing-structure', bpm: detectedBpm ?? 0, trackId: newTrack.id }

@@ -204,7 +204,7 @@ const [smartLoading, setSmartLoading] = useState(false)
     : null
 
   // ➕ Adiciona faixa (local + banco) — com folderId
-  const addTrack = (track: Track, durationSec?: number) => {
+  const addTrack = (track: Track, durationSec?: number, fileHash?: string | null) => {
     const folderId = (selectedFolderId === 'all' || selectedFolderId === null)
       ? null
       : selectedFolderId
@@ -225,7 +225,8 @@ const [smartLoading, setSmartLoading] = useState(false)
         key: track.key || '',
         energy: track.energy || 7,
         durationSec: durationSec ?? 0,
-        firstBeatSec: track.firstBeatSec ?? 0,   // 
+        firstBeatSec: track.firstBeatSec ?? 0,
+        fileHash: fileHash ?? null,
       }),
     })
       .then(res => {
