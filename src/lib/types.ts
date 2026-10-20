@@ -38,6 +38,7 @@ export interface SetlistTrack extends Track {
 }
 
 export interface GeneratedSetlist {
+  id?: string              // ← NOVO (opcional, pra linkar com pasta)
   setlist: SetlistTrack[]
   totalDuration: string
   analysis: string

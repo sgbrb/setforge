@@ -501,6 +501,7 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
 
     // Adapta resposta da nossa rota pro formato que SetlistView espera
     const adapted: GeneratedSetlist = {
+       id: data.id,      
       setlist: data.tracks.map((t: any, i: number) => ({
         ...t,
         position: i + 1,

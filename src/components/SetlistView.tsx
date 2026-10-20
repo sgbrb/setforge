@@ -14,9 +14,9 @@ import {
 } from '@/lib/mix-timeline'
 import { analyzeTransitions, type TransitionIssue } from '@/lib/setlist-analysis'
 import CompatibilityMatrix from './CompatibilityMatrix'
-import ExportRekordboxModal from './ExportRekordboxModal'
 import EnergyCurveChart from './EnergyCurveChart'
 import HarmonyCurveChart from './HarmonyCurveChart'
+import SaveToFolderButton from './SaveToFolderButton'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -37,7 +37,6 @@ export default function SetlistView({
 }: SetlistViewProps) {
  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
   const [showMatrix, setShowMatrix] = useState(false)
-  const [showExportModal, setShowExportModal] = useState(false)
 
   // 📋 Fase 5.6 — faixas do setlist SEM análise estrutural
   const tracksWithoutAnalysis = useMemo(() => {
@@ -229,42 +228,7 @@ const transitions = useMemo(() => {
       alert('Erro ao gerar PDF. Tenta de novo.')
     }
   }
-    const exportM3U = () => {
-    try {
-      const lines: string[] = ['#EXTM3U']
-
-      for (const track of setlist.setlist) {
-        // Duração estimada (se não tiver, usa 5 min)
-        const durationSec = 300  // fallback fixo (5 min)
-        const mins = Math.floor(durationSec / 60)
-        const secs = durationSec % 60
-
-        // Nome do arquivo (deriva do title)
-        const filename = track.title.includes('.mp3') ? track.title : `${track.title}.mp3`
-        const fullPath = `E:\\pn_\\${filename}`
-
-        lines.push(`#EXTINF:${mins * 60 + secs},${track.title}`)
-        lines.push(fullPath)
-      }
-
-      // Cria blob e força download
-      const content = lines.join('\n')
-      const blob = new Blob([content], { type: 'audio/x-mpegurl' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `setforge-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.m3u`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      console.log(`[SetlistView] M3U exportado: ${lines.length - 1} faixas`)
-    } catch (err) {
-      console.error('[SetlistView] Erro no M3U:', err)
-      alert('Erro ao gerar M3U. Tenta de novo.')
-    }
-  }
+    
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
@@ -464,164 +428,68 @@ const transitions = useMemo(() => {
         </div>
       </div>
 
-      {/* DJ TIP */}
-      {setlist.djTip && (
-        <div style={{
-          padding: '16px 18px',
-          background: 'var(--surface2)',
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-start',
-        }}>
-          <span style={{ fontSize: 20, lineHeight: 1 }}>💡</span>
-          <div>
-            <p style={{
-              fontSize: 11,
-              color: 'var(--muted)',
-              fontFamily: 'var(--font-mono, monospace)',
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-              marginBottom: 6,
-            }}>
-              dica de DJ
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
-              {setlist.djTip}
-            </p>
-          </div>
-        </div>
-      )}
+      
+{/* BOTÕES DE AÇÃO */}
+<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+  <button
+    onClick={exportPdf}
+    style={{
+      flex: 1,
+      minWidth: 180,
+      padding: '12px 20px',
+      background: 'var(--surface2)',
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      color: 'var(--text)',
+      fontFamily: 'inherit',
+      fontSize: 14,
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+    }}
+  >
+    📄 exportar PDF
+  </button>
 
-      {/* PEAK MOMENT */}
-      {setlist.peakMoment && (
-        <div style={{
-          padding: '16px 18px',
-          background: 'linear-gradient(135deg, rgba(252, 92, 92, 0.1), rgba(196, 92, 252, 0.1))',
-          border: '1px solid rgba(252, 92, 92, 0.3)',
-          borderRadius: 12,
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-start',
-        }}>
-          <span style={{ fontSize: 20, lineHeight: 1 }}>🔥</span>
-          <div>
-            <p style={{
-              fontSize: 11,
-              color: 'var(--red)',
-              fontFamily: 'var(--font-mono, monospace)',
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-              marginBottom: 6,
-            }}>
-              momento de pico
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)' }}>
-              {setlist.peakMoment}
-            </p>
-          </div>
-        </div>
-      )}
+  <div style={{ flex: 1, minWidth: 180 }}>
+    <SaveToFolderButton
+      setlistId={setlist.id}
+      trackIds={setlist.setlist.map(t => t.id)}
+    />
+  </div>
 
-            {/* EXPORTAR PRO REKORDBOX */}
-      {transitions.length > 0 && (
-        <button
-          onClick={() => setShowExportModal(true)}
-          style={{
-            padding: '12px 20px',
-            background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
-            border: 'none',
-            borderRadius: 10,
-            color: '#fff',
-            fontFamily: 'inherit',
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-          }}
-        >
-          📥 exportar pro Rekordbox
-        </button>
-      )}
-      {/* 🆕 Fase B — exportar PDF */}
-<button
-  onClick={exportPdf}
-  style={{
-    padding: '12px 20px',
-    background: 'var(--surface2)',
-    border: '1px solid var(--border)',
-    borderRadius: 10,
-    color: 'var(--text)',
-    fontFamily: 'inherit',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  }}
->
-  {/* 🆕 Fase B.2 — exportar M3U */}
-<button
-  onClick={exportM3U}
-  style={{
-    padding: '12px 20px',
-    background: 'var(--surface2)',
-    border: '1px solid var(--border)',
-    borderRadius: 10,
-    color: 'var(--text)',
-    fontFamily: 'inherit',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  }}
->
-  🎵 exportar M3U
-</button>
-  📄 exportar PDF
-</button>
+  {onRegenerate && (
+    <button
+      onClick={onRegenerate}
+      style={{
+        flex: 1,
+        minWidth: 180,
+        padding: '12px 20px',
+        background: 'var(--surface2)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        color: 'var(--text)',
+        fontFamily: 'inherit',
+        fontSize: 14,
+        fontWeight: 600,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+      }}
+    >
+      ⟳ gerar novamente
+    </button>
+  )}
+</div>
+        
+        
 
-      {/* REGENERAR */}
-      {onRegenerate && (
-        <button
-          onClick={onRegenerate}
-          style={{
-            padding: '12px 20px',
-            background: 'var(--surface2)',
-            border: '1px solid var(--border)',
-            borderRadius: 10,
-            color: 'var(--text)',
-            fontFamily: 'inherit',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-          }}
-        >
-          ⟳ gerar novamente
-        </button>
-      )}
-
-      {/* MODAL DE EXPORT */}
-      {showExportModal && (
-        <ExportRekordboxModal
-          setlist={setlist}
-          transitions={transitions}
-          onClose={() => setShowExportModal(false)}
-        />
-      )}
+      
     </div>
   )
 }

@@ -190,63 +190,8 @@ export default function SmartSetlistModal({
             }}
           />
         </label>
-{/* Só faixas com análise */}
-<label
-  style={{
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 24,
-    cursor: 'pointer',
-  }}
-  title="⚠️ Só funciona depois que você analisar faixas (Fase 3). Hoje a maioria da biblioteca do XML não tem análise."
->
-  <span
-  style={{
-    fontSize: 13,
-    color: 'var(--accent)',
-    lineHeight: 1.4,
-  }}
->
-    Só faixas com análise estrutural (crossfade disponível)
-    <span
-      style={{
-        display: 'block',
-        fontSize: 11,
-        color: 'var(--muted)',
-        marginTop: 2,
-        fontFamily: 'var(--font-mono, monospace)',
-      }}
-    >
-      ⚠️ só funciona com faixas já analisadas
-    </span>
-  </span>
-</label>
-        {/* Camelot estrito */}
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 12,
-            cursor: 'pointer',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={camelotStrict}
-            onChange={(e) => setCamelotStrict(e.target.checked)}
-            style={{ width: 16, height: 16, cursor: 'pointer' }}
-          />
-          <span
-            style={{
-              fontSize: 13,
-              color: 'var(--fg)',
-            }}
-          >
-            Só Camelot compatível (score ≥ 85)
-          </span>
-        </label>
+
+        
 
         {/* Botões */}
         <div style={{ display: 'flex', gap: 10 }}>
