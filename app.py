@@ -26,7 +26,8 @@ from energy_detect import detect_energy
 FFMPEG_SHARED_BIN = r"C:\ffmpeg\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin"
 if os.path.isdir(FFMPEG_SHARED_BIN):
     os.environ["PATH"] = FFMPEG_SHARED_BIN + os.pathsep + os.environ.get("PATH", "")
-    print(f"[startup] FFmpeg bin (PATH): {FFMPEG_SHARED_BIN}", flush=True)
+    os.add_dll_directory(FFMPEG_SHARED_BIN)
+    print(f"[startup] FFmpeg bin (PATH + DLL): {FFMPEG_SHARED_BIN}", flush=True)
 
 # 🔑 S-KEY
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -123,13 +124,32 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
         print(f"[job {job_id}] Aviso: não copiei pro S-KEY: {e}", flush=True)
         skey_path = tmp_path
 
+    # 🆕 Converte pra WAV se for MP3 (torchcodec quebrado no Windows)
+    import subprocess
+    import tempfile
+    wav_path = None
+    analyze_path = tmp_path
+    if tmp_path.lower().endswith('.mp3'):
+        wav_path = tempfile.mktemp(suffix='.wav')
+        ffmpeg_exe = r"C:\ffmpeg\ffmpeg-n7.1.1-57-g1b48158a23-win64-lgpl-shared-7.1\bin\ffmpeg.exe"
+        print(f"[job {job_id}] Convertendo MP3 → WAV...", flush=True)
+        try:
+            subprocess.run(
+                [ffmpeg_exe, '-y', '-i', tmp_path, '-ar', '44100', '-ac', '2', wav_path],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+            analyze_path = wav_path
+        except Exception as e:
+            print(f"[job {job_id}] ERRO na conversão: {e}", flush=True)
+            raise
+
     try:
         print(f"[job {job_id}] Iniciando análise de {original_name}...", flush=True)
         with JOBS_LOCK:
             JOBS[job_id]["status"] = "processing"
 
-        # 🆕 Lock global: só uma análise por vez.
-        # Serializa o uso da GPU e evita disputa de contexto CUDA entre threads.
         with ANALYZE_LOCK:
             t0 = time.time()
 
@@ -137,15 +157,14 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
             torch.set_default_device("cuda")
             from allin1_infer import analyze
             result = analyze(
-                tmp_path,
+                analyze_path,          # ← WAV (ou FLAC)
                 device="cuda",
                 demucs_fp16=True,
-                demucs_overlap=0.25,     # 🆕 Reduzido de 0.5 → menos tempo segurando o GIL
+                demucs_overlap=0.25,
                 keep_byproducts=False,
-                multiprocess=False,      # 🆕 Desligado (evita processos filhos + EADDRINUSE)
+                multiprocess=False,
             )
 
-            # S-KEY (síncrono) — também dentro do lock (usa GPU)
             key_camelot = ''
             if result.bpm and result.bpm >= 100:
                 key_camelot = detect_key_skey(skey_path)
@@ -168,7 +187,7 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
         # 🆕 Detecção de energia (rápida, ~2s)
         energy = None
         try:
-            energy = detect_energy(tmp_path)
+            energy = detect_energy(analyze_path)   # ← WAV (funciona)
             print(f"[job {job_id}] Energia: {energy}/10", flush=True)
         except Exception as e:
             print(f"[job {job_id}] Aviso: energia falhou: {e}", flush=True)
@@ -181,7 +200,7 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
                 "segments": segments,
                 "energy": energy,
             }
-        
+
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[job {job_id}] ERRO: {e}\n{tb}", flush=True)
@@ -189,13 +208,19 @@ def _run_analysis(job_id: str, tmp_path: str, original_name: str):
             JOBS[job_id]["status"] = "error"
             JOBS[job_id]["error"] = str(e)
     finally:
+        # Limpa o WAV temporário
+        if wav_path and os.path.exists(wav_path):
+            try:
+                os.unlink(wav_path)
+            except Exception:
+                pass
+        # Limpa o tmp_path e skey_path
         for p in [tmp_path, skey_path]:
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
                 except Exception:
                     pass
-
 
 @app.route("/analyze", methods=["POST"])
 def analyze_audio():
