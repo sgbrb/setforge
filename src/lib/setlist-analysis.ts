@@ -55,7 +55,7 @@ export function analyzeTransitions(
     const durationB = durations[b.id] ?? 0
 
     // Se uma das 2 não tem análise estrutural → 'unknown'
-    if (!analysisA || !analysisB || durationA <= 0 || durationB <= 0) {
+    if (!analysisA || !analysisB) {
       issues.push({
         index: i,
         fromTitle: a.title,
