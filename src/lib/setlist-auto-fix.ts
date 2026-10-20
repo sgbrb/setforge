@@ -15,7 +15,7 @@ export async function autoFixSetlist(
   durations: Record<string, number>,
   prisma: PrismaLike,
   userId: string,
-  maxIterations = 3
+  maxIterations = 5
 ): Promise<{ tracks: Track[]; iterations: number; finalScore: number }> {
   let current = [...tracks]
   let iterations = 0
@@ -52,7 +52,7 @@ export async function autoFixSetlist(
           segments: { not: null },
           id: { notIn: [...currentIds, fromTrack.id] },
         },
-        take: 100,
+        take: 200,
         select: {
           id: true,
           title: true,
@@ -93,7 +93,7 @@ export async function autoFixSetlist(
         }
       }
 
-      if (bestCandidate && bestCandidate.score > issue.score) {
+      if (bestCandidate && bestCandidate.score > issue.score + 5) {
         const newTrack: Track = {
           id: bestCandidate.track.id,
           folderId: null,
