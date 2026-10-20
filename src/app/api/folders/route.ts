@@ -18,7 +18,12 @@ export async function GET() {
       where: { userId: session.user.id },
       orderBy: { createdAt: 'desc' },
       include: {
-        _count: { select: { tracks: true } },
+        _count: {
+          select: {
+            tracks: true,
+            virtualTracks: true,
+          },
+        },
       },
     })
 
@@ -32,7 +37,7 @@ export async function GET() {
 /**
  * POST /api/folders
  * Cria uma pasta nova.
- * Body: { name: string }
+ * Body: { name: string, isVirtual?: boolean }
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -41,7 +46,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { name } = await req.json()
+    const { name, isVirtual } = await req.json()
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 })
@@ -51,6 +56,7 @@ export async function POST(req: NextRequest) {
       data: {
         name: name.trim(),
         userId: session.user.id,
+        isVirtual: isVirtual === true,
       },
     })
 
@@ -82,7 +88,6 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 })
     }
 
-    // Confirma que a pasta pertence ao usuário
     const existing = await prisma.folder.findFirst({
       where: { id, userId: session.user.id },
     })
@@ -104,7 +109,7 @@ export async function PATCH(req: NextRequest) {
 
 /**
  * DELETE /api/folders?id=xxx
- * Deleta uma pasta. As faixas dentro dela ficam sem pasta (folderId = null).
+ * Deleta uma pasta.
  */
 export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -118,7 +123,6 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'ID é obrigatório' }, { status: 400 })
     }
 
-    // Confirma que a pasta pertence ao usuário
     const folder = await prisma.folder.findFirst({
       where: { id, userId: session.user.id },
     })
