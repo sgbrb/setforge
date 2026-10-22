@@ -83,6 +83,7 @@ export async function PATCH(
       where: { id },
       data: {
         ...(folderId !== undefined ? { folderId } : {}),
+        ...(name !== undefined ? { name } : {}), 
       },
     })
 

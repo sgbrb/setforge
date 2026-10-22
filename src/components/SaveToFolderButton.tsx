@@ -73,7 +73,10 @@ export default function SaveToFolderButton({
       const patchRes = await fetch(`/api/setlists/${setlistId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId }),
+        body: JSON.stringify({ 
+          folderId,
+          name: folderName
+        }),
       })
 
       if (!patchRes.ok) {

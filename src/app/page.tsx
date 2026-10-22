@@ -723,6 +723,8 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
             </Panel>
           ) : (
             <>
+          
+          {activeTab === 'library' && (
           <Panel title="biblioteca de músicas" badge={libraryBadge}>
             <TrackUpload
               onAddTrack={addTrack}
@@ -811,7 +813,7 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
               )}
             </div>
           </Panel>
-
+  )} 
           {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
           {canGenerateSetlist && (loading || setlist) && (
             <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
