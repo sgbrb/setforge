@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { generateSmartSet } from '@/lib/tsp'
 import { autoFixSetlist } from '@/lib/setlist-auto-fix'
+import { applyDiversity } from '@/lib/setlist-diversity'
 import type { Track as FrontendTrack } from '@/lib/types'
 
 const RECENT_SETLISTS_FOR_EQUALITY = 100   // Regra B — não repetir set igual
@@ -296,11 +297,33 @@ for (const t of allTracksWithSegments) {
       )
 
                 if (!isDuplicate) {
-        // 🆕 Auto-fix: tenta zerar transições ruins (até 3 iterações)
-        let finalTracks = result.tracks
-        let fixIterations = 1
-        let fixScore = result.averageScore
+        
+  // 🆕 Auto-fix
+  let finalTracks = result.tracks
+  let fixIterations = 1
+  let fixScore = result.averageScore
 
+  try {
+    const fixResult = await autoFixSetlist(
+      result.tracks,
+      analyses,
+      durations,
+      prisma,
+      userId,
+      3
+    )
+    finalTracks = fixResult.tracks
+    fixIterations = fixResult.iterations
+    fixScore = fixResult.finalScore
+    console.log(`[auto-fix] ${fixIterations} iterações · score final ${fixScore}`)
+  } catch (err) {
+    console.warn('[auto-fix] Falhou, usando set original:', err)
+  }
+
+  // 🆕 Diversity
+  const diversityResult = await applyDiversity(finalTracks, userId)
+  console.log(`[diversity] ${diversityResult.changes} faixas precisam de troca`)
+  finalTracks = diversityResult.tracks
         try {
           const fixResult = await autoFixSetlist(
             result.tracks,
@@ -317,6 +340,7 @@ for (const t of allTracksWithSegments) {
         } catch (err) {
           console.warn('[auto-fix] Falhou, usando set original:', err)
         }
+
 
         // Achou um set único — salva no banco + retorna
         const savedSetlist = await prisma.setlist.create({
