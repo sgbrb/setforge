@@ -5,29 +5,16 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { generateSmartSet } from '@/lib/tsp'
 import { autoFixSetlist } from '@/lib/setlist-auto-fix'
-import { applyDiversity } from '@/lib/setlist-diversity'
 import type { Track as FrontendTrack } from '@/lib/types'
 
-const RECENT_SETLISTS_FOR_EQUALITY = 100   // Regra B — não repetir set igual
-const MAX_RETRIES = 5                     // seeds: base+0, base+1, ..., base+4
+const RECENT_SETLISTS_FOR_EQUALITY = 100
+const MAX_RETRIES = 5
 const BASE_SEED = 42
 
-/**
- * Normaliza título pra comparação (Regra B).
- * Lowercase, trim, espaços colapsados.
- */
 function normalizeTitle(s: string): string {
   return (s || '').toLowerCase().trim().replace(/\s+/g, ' ')
 }
 
-/**
- * Assinatura de um setlist pra comparação B1:
- * - Set de trackIds (ignora null/gen-xxx)
- * - Set de títulos normalizados
- *
- * Dois setlists são "iguais" se TODOS os trackIds reais batem
- * OU se todos os títulos normalizados batem.
- */
 function buildSetlistSignature(
   tracks: Array<{ trackId: string | null; title: string }>
 ): { ids: Set<string>; titles: Set<string> } {
@@ -46,15 +33,10 @@ function buildSetlistSignature(
   return { ids, titles }
 }
 
-/**
- * Compara 2 assinaturas. Retorna true se forem iguais.
- * "Iguais" = mesmos trackIds (não-vazios) OU mesmos títulos (não-vazios).
- */
 function signaturesMatch(
   a: { ids: Set<string>; titles: Set<string> },
   b: { ids: Set<string>; titles: Set<string> }
 ): boolean {
-  // Se ambos têm ids reais e são idênticos → match
   if (a.ids.size > 0 && b.ids.size > 0 && a.ids.size === b.ids.size) {
     let allIn = true
     for (const id of a.ids) {
@@ -66,7 +48,6 @@ function signaturesMatch(
     if (allIn) return true
   }
 
-  // Se ambos têm títulos e são idênticos → match
   if (
     a.titles.size > 0 &&
     b.titles.size > 0 &&
@@ -85,25 +66,6 @@ function signaturesMatch(
   return false
 }
 
-/**
- * POST /api/generate-smart-setlist
- *
- * Gera um setlist inteligente usando TSP (nearest neighbor + 2-opt + or-opt).
- *
- * Regras aplicadas:
- * - A: exclui faixas dos últimos 4 setlists
- * - B1: não repete set igual (mesmas faixas, qualquer ordem) — últimos 20 setlists
- *       Tenta até 5 seeds diferentes. Se todas falharem, devolve a última + warning.
- *
- * Body (todos opcionais):
- *   {
- *     bpmTarget?: number
- *     bpmRange?: number
- *     camelotStrict?: boolean
- *     setSize?: number
- *     seed?: number
- *   }
- */
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -113,8 +75,7 @@ export async function POST(req: NextRequest) {
 
     const userId = session.user.id
 
-    // 1. Parse do body
-        let body: {
+    let body: {
       bpmTarget?: number
       bpmRange?: number
       camelotStrict?: boolean
@@ -143,7 +104,7 @@ export async function POST(req: NextRequest) {
     const baseSeed =
       typeof body.seed === 'number' ? body.seed : BASE_SEED
 
-    // 2. Busca os últimos 20 setlists do usuário (Regra A + Regra B)
+    // 2. Busca os últimos 100 setlists (Regra B)
     const recentSetlists = await prisma.setlist.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -155,43 +116,41 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Regra A: pega trackIds dos 4 mais recentes pra excluir
-    const SETS_RECENT = 5      // últimos 5
-const SETS_MEDIUM = 20     // 6-20
-const SETS_OLD = 50        // 21-50
-const PENALTY_RECENT = 0.8
-const PENALTY_MEDIUM = 0.5
-const PENALTY_OLD = 0.2
+    // Penalidade por uso (Regra A quebrada em níveis)
+    const SETS_RECENT = 5
+    const SETS_MEDIUM = 20
+    const SETS_OLD = 50
+    const PENALTY_RECENT = 0.8
+    const PENALTY_MEDIUM = 0.5
+    const PENALTY_OLD = 0.2
 
-const usagePenalty: Record<string, number> = {}
-for (let i = 0; i < recentSetlists.length; i++) {
-  const setAge = i   // 0 = mais recente
-  let penalty = 0
-  if (setAge < SETS_RECENT) penalty = PENALTY_RECENT
-  else if (setAge < SETS_MEDIUM) penalty = PENALTY_MEDIUM
-  else if (setAge < SETS_OLD) penalty = PENALTY_OLD
-  else continue   // não penaliza
+    const usagePenalty: Record<string, number> = {}
+    for (let i = 0; i < recentSetlists.length; i++) {
+      const setAge = i
+      let penalty = 0
+      if (setAge < SETS_RECENT) penalty = PENALTY_RECENT
+      else if (setAge < SETS_MEDIUM) penalty = PENALTY_MEDIUM
+      else if (setAge < SETS_OLD) penalty = PENALTY_OLD
+      else continue
 
-  for (const t of recentSetlists[i].tracks) {
-    if (t.trackId && !t.trackId.startsWith('gen-')) {
-      usagePenalty[t.trackId] = Math.max(usagePenalty[t.trackId] ?? 0, penalty)
+      for (const t of recentSetlists[i].tracks) {
+        if (t.trackId && !t.trackId.startsWith('gen-')) {
+          usagePenalty[t.trackId] = Math.max(usagePenalty[t.trackId] ?? 0, penalty)
+        }
+      }
     }
-  }
-}
 
-    // Regra B: assinaturas dos 20 últimos pra comparar
     const recentSignatures = recentSetlists.map(sl =>
       buildSetlistSignature(sl.tracks)
     )
 
-    // 3. Busca faixas do usuário (bpm > 0, fora das excluídas)
+    // 3. Busca faixas (COM segments)
     const prismaTracks = await prisma.track.findMany({
-  where: {
-    userId,
-    bpm: { gt: 0 },
-    segments: { not: Prisma.DbNull },
-    
-  },
+      where: {
+        userId,
+        bpm: { gt: 0 },
+        segments: { not: Prisma.DbNull },
+      },
       select: {
         id: true,
         folderId: true,
@@ -202,69 +161,83 @@ for (let i = 0; i < recentSetlists.length; i++) {
         energy: true,
         durationSec: true,
         firstBeatSec: true,
-        segments: true, 
+        segments: true,
       },
     })
 
     if (prismaTracks.length === 0) {
       return NextResponse.json(
-        {
-          error:
-            'Nenhuma faixa disponível (todas com BPM foram excluídas pelos últimos 4 setlists?).',
-        },
+        { error: 'Nenhuma faixa disponível com análise estrutural.' },
         { status: 400 }
       )
     }
 
     // 4. Converte Prisma.Track → types.Track
-   const library: FrontendTrack[] = prismaTracks.map(t => {
-  const segs = t.segments as any
-  return {
-    id: t.id,
-    folderId: t.folderId,
-    title: t.title,
-    artist: t.artist,
-    bpm: t.bpm,
-    key: t.key,
-    energy: segs?.energy ?? 0,   // ← extrai de segments.energy
-    firstBeatSec: t.firstBeatSec,
-    durationMs: t.durationSec > 0 ? Math.round(t.durationSec * 1000) : undefined,
-  }
-})
+    const library: FrontendTrack[] = prismaTracks.map(t => {
+      const segs = t.segments as any
+      return {
+        id: t.id,
+        folderId: t.folderId,
+        title: t.title,
+        artist: t.artist,
+        bpm: t.bpm,
+        key: t.key,
+        energy: segs?.energy ?? 0,
+        firstBeatSec: t.firstBeatSec,
+        durationMs: t.durationSec > 0 ? Math.round(t.durationSec * 1000) : undefined,
+      }
+    })
 
-    // 5. Loop de retry (Regra B1 — até 5 seeds diferentes)
+    // 5. 🆕 FILTRO DE DIVERSIDADE (antes do TSP)
+    const recentForDiversity = await prisma.setlist.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+      include: { tracks: { select: { trackId: true } } },
+    })
+
+    const usedIds = new Set<string>()
+    for (const set of recentForDiversity) {
+      for (const t of set.tracks) {
+        if (t.trackId) usedIds.add(t.trackId)
+      }
+    }
+
+    let filteredLibrary = library.filter(t => !usedIds.has(t.id))
+
+    if (filteredLibrary.length < 60) {
+      console.log(`[diversity] Filtro muito agressivo (${filteredLibrary.length} faixas). Usando pool original.`)
+      filteredLibrary = library
+    } else {
+      console.log(`[diversity] Pool filtrado: ${library.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} gastas)`)
+    }
+
+    // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
+    const allTracksWithSegments = await prisma.track.findMany({
+      where: { userId, segments: { not: Prisma.DbNull } },
+      select: { id: true, durationSec: true, segments: true },
+    })
+
+    const analyses: Record<string, any> = {}
+    const durations: Record<string, number> = {}
+
+    for (const t of allTracksWithSegments) {
+      if (t.segments) {
+        analyses[t.id] = t.segments
+        durations[t.id] = t.durationSec ?? 0
+      }
+    }
+
+    // 7. LOOP DE RETRY
     let lastResult: ReturnType<typeof generateSmartSet> | null = null
     let lastSignature: ReturnType<typeof buildSetlistSignature> | null = null
     let attemptUsed = 0
-
-    // 🆕 Prepara dados pro auto-fix (UMA VEZ, fora do loop)
-const allTracksWithSegments = await prisma.track.findMany({
-  where: {
-    userId,
-    segments: { not: Prisma.DbNull },
-  },
-  select: {
-    id: true,
-    durationSec: true,
-    segments: true,
-  },
-})
-
-const analyses: Record<string, any> = {}
-const durations: Record<string, number> = {}
-
-for (const t of allTracksWithSegments) {
-  if (t.segments) {
-    analyses[t.id] = t.segments
-    durations[t.id] = t.durationSec ?? 0
-  }
-}
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const seed = baseSeed + attempt
       attemptUsed = attempt + 1
 
-      const result = generateSmartSet(library, {
+      const result = generateSmartSet(filteredLibrary, {
         count: setSize,
         bpmTarget,
         bpmRange,
@@ -278,52 +251,27 @@ for (const t of allTracksWithSegments) {
       if (result.tracks.length === 0) {
         return NextResponse.json(
           {
-            error:
-              'Nenhuma faixa compatível com os filtros. Tenta aumentar o bpmRange ou tirar o camelotStrict.',
+            error: 'Nenhuma faixa compatível com os filtros. Tenta aumentar o bpmRange ou tirar o camelotStrict.',
             candidates: result.candidates,
           },
           { status: 400 }
         )
       }
 
-      // Constrói assinatura do resultado
       const signature = buildSetlistSignature(
         result.tracks.map(t => ({ trackId: t.id, title: t.title }))
       )
 
-      // Compara com os últimos 20 (B1)
       const isDuplicate = recentSignatures.some(sig =>
         signaturesMatch(sig, signature)
       )
 
-                if (!isDuplicate) {
-        
-  // 🆕 Auto-fix
-  let finalTracks = result.tracks
-  let fixIterations = 1
-  let fixScore = result.averageScore
+      if (!isDuplicate) {
+        // 8. AUTO-FIX (tenta zerar transições ruins)
+        let finalTracks = result.tracks
+        let fixIterations = 1
+        let fixScore = result.averageScore
 
-  try {
-    const fixResult = await autoFixSetlist(
-      result.tracks,
-      analyses,
-      durations,
-      prisma,
-      userId,
-      3
-    )
-    finalTracks = fixResult.tracks
-    fixIterations = fixResult.iterations
-    fixScore = fixResult.finalScore
-    console.log(`[auto-fix] ${fixIterations} iterações · score final ${fixScore}`)
-  } catch (err) {
-    console.warn('[auto-fix] Falhou, usando set original:', err)
-  }
-
-  // 🆕 Diversity
-  const diversityResult = await applyDiversity(finalTracks, userId)
-  console.log(`[diversity] ${diversityResult.changes} faixas precisam de troca`)
-  finalTracks = diversityResult.tracks
         try {
           const fixResult = await autoFixSetlist(
             result.tracks,
@@ -341,8 +289,7 @@ for (const t of allTracksWithSegments) {
           console.warn('[auto-fix] Falhou, usando set original:', err)
         }
 
-
-        // Achou um set único — salva no banco + retorna
+        // 9. Salva no banco + retorna
         const savedSetlist = await prisma.setlist.create({
           data: {
             name: `Smart · ${new Date().toLocaleDateString('pt-BR')}`,
@@ -355,9 +302,7 @@ for (const t of allTracksWithSegments) {
             peakMoment: null,
             totalDuration: `${finalTracks.length} faixas`,
             userId,
-            folderId: (typeof body.folderId === 'string' && body.folderId !== 'all')
-              ? body.folderId
-              : null,
+            folderId: (typeof body.folderId === 'string' && body.folderId !== 'all') ? body.folderId : null,
             tracks: {
               create: finalTracks.map((t, i) => ({
                 position: i + 1,
@@ -394,12 +339,12 @@ for (const t of allTracksWithSegments) {
           },
         })
       }
-      // Guarda pra caso todas as tentativas falhem
+
       lastResult = result
       lastSignature = signature
     }
 
-    // 6. Todas as tentativas deram duplicado → devolve a última + warning
+    // 10. Todas as tentativas deram duplicado
     if (!lastResult) {
       return NextResponse.json(
         { error: 'Não foi possível gerar nenhum setlist.' },
@@ -407,7 +352,6 @@ for (const t of allTracksWithSegments) {
       )
     }
 
-        // Salva mesmo em duplicata (último resultado)
     const savedSetlist = await prisma.setlist.create({
       data: {
         name: `Smart · ${new Date().toLocaleDateString('pt-BR')}`,
@@ -420,9 +364,7 @@ for (const t of allTracksWithSegments) {
         peakMoment: null,
         totalDuration: `${lastResult.tracks.length} faixas`,
         userId,
-        folderId: (typeof body.folderId === 'string' && body.folderId !== 'all')
-  ? body.folderId
-  : null,
+        folderId: (typeof body.folderId === 'string' && body.folderId !== 'all') ? body.folderId : null,
         tracks: {
           create: lastResult.tracks.map((t, i) => ({
             position: i + 1,
@@ -444,7 +386,7 @@ for (const t of allTracksWithSegments) {
       averageScore: lastResult.averageScore,
       worstScore: lastResult.worstScore,
       candidates: lastResult.candidates,
-      requestedCount: lastResult.requestedCount, 
+      requestedCount: lastResult.requestedCount,
       effectiveCount: lastResult.effectiveCount,
       elapsedMs: lastResult.elapsedMs,
       seed: lastResult.seed,
