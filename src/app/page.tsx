@@ -727,95 +727,61 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
             <>
           
           {activeTab === 'library' && (
-          <Panel title="biblioteca de músicas" badge={libraryBadge}>
-            <TrackUpload
-              onAddTrack={addTrack}
-              onAddAnalysis={handleAddAnalysis}
-              onQueueChange={setQueueStats}
-              libraryTracks={filteredTracks}
-            />
+  <Panel title="biblioteca de músicas" badge={libraryBadge}>
+    <TrackUpload
+      onAddTrack={addTrack}
+      onAddAnalysis={handleAddAnalysis}
+      onQueueChange={setQueueStats}
+      libraryTracks={filteredTracks}
+    />
 
-            {filteredTracks.length > 0 && (
-              <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-                <button
-                  onClick={clearLibrary}
-                  style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
-                >
-                  limpar {selectedFolderId === 'all' ? 'biblioteca' : 'pasta'}
-                </button>
-              </div>
-            )}
+    {filteredTracks.length > 0 && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setSmartModalOpen(true)}
+          disabled={loading}
+          style={{
+            ...btnStyle('secondary'),
+            flex: 1,
+            justifyContent: 'center',
+            cursor: loading ? 'not-allowed' : 'pointer',
+          }}
+        >
+          gerar setlist SetForge
+        </button>
+        {/* <button
+          onClick={clearLibrary}
+          style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
+        >
+          limpar biblioteca
+        </button> */}
+      </div>
+    )}
 
-            {filteredTracks.length > 0 && (
-              <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-                <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
-                  {selectedFolderId === 'all'
-                    ? 'faixas na biblioteca (repositório de uploads — arraste pra uma pasta)'
-                    : selectedFolderId === null
-                      ? 'faixas sem pasta'
-                      : `faixas nesta pasta · ${folderName}`}
-                </p>
-                <TrackList
-                  tracks={filteredTracks}
-                  folders={folders}
-                  analyses={analyses}
-                  onRemove={removeTrack}
-                  onMoveToFolder={moveTrackToFolder}
-                  onDragStart={setDraggingTrackId}
-                  onDragEnd={() => setDraggingTrackId(null)}
-                  onClearAnalysis={clearAnalysis}
-                  showAnalysis={selectedFolderId !== 'all'}
-                />
-              </div>
-            )}
-
-            {/* 🆕 Bloco do botão "montar setlist" — só dentro de pasta real */}
-            <div style={{ marginTop: 20 }}>
-              {canGenerateSetlist ? (
-                <>
-                  <div style={{ display: 'flex', gap: 10 }}>
-
-
-                    <button
-                      onClick={() => setSmartModalOpen(true)}
-                      disabled={loading}
-                      style={{
-                        ...btnStyle('secondary'),
-                        flex: 1,
-                        justifyContent: 'center',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      ⚡ gerar inteligente
-                    </button>
-                  </div>
-                  {filteredTracks.length < 3 && (
-                    <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
-                      adicione pelo menos 3 faixas nesta pasta para montar
-                    </p>
-                  )}
-                </>
-              ) : (
-                <div style={{
-                  padding: '16px 20px',
-                  background: 'var(--surface2)',
-                  border: '1px dashed var(--border)',
-                  borderRadius: 10,
-                  textAlign: 'center',
-                }}>
-                  <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 6, fontFamily: 'var(--font-mono, monospace)' }}>
-                    💡 selecione uma pasta para montar o setlist
-                  </p>
-                  <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-                    "todas as faixas" é só o <strong>repositório de uploads</strong>.<br />
-                    Crie uma pasta (ex: <em>festa</em>), arraste as faixas pra lá,<br />
-                    e monte o setlist <strong>dentro dela</strong>.
-                  </p>
-                </div>
-              )}
-            </div>
-          </Panel>
-  )} 
+    {filteredTracks.length > 0 && (
+      <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+        <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
+          {selectedFolderId === 'all'
+            ? 'faixas na biblioteca (repositório de uploads)'
+            : selectedFolderId === null
+              ? 'faixas sem pasta'
+              : `faixas nesta pasta · ${folderName}`}
+        </p>
+        <TrackList
+          tracks={filteredTracks}
+          folders={folders}
+          analyses={analyses}
+          onRemove={removeTrack}
+          onMoveToFolder={moveTrackToFolder}
+          onDragStart={setDraggingTrackId}
+          onDragEnd={() => setDraggingTrackId(null)}
+          onClearAnalysis={clearAnalysis}
+          showAnalysis={selectedFolderId !== 'all'}
+        />
+      </div>
+    )}
+  </Panel>
+)}
           {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
           {canGenerateSetlist && (loading || setlist) && (
             <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
