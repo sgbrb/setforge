@@ -179,7 +179,7 @@ export default function FolderList({
         </p>
       )}
 
-      {folders.map(folder => (
+            {false && folders.map(folder => (
         <FolderRow
           key={folder.id}
           icon="📁"
