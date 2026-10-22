@@ -14,18 +14,23 @@ export async function GET() {
   }
 
   try {
-    const folders = await prisma.folder.findMany({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: {
-          select: {
-            tracks: true,
-            virtualTracks: true,
-          },
-        },
+      const folders = await prisma.folder.findMany({
+  where: { userId: session.user.id },
+  orderBy: { createdAt: 'desc' },
+  select: {
+    id: true,
+    name: true,
+    isVirtual: true,   // ← NOVO
+    createdAt: true,
+    updatedAt: true,
+    _count: {
+      select: {
+        tracks: true,
+        virtualTracks: true,
       },
-    })
+    },
+  },
+})
 
     return NextResponse.json({ folders })
   } catch (error) {

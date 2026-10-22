@@ -125,7 +125,9 @@ const [smartLoading, setSmartLoading] = useState(false)
         const data = await res.json()
         const rawFolders: any[] = data.folders ?? []
 
-        const mappedFolders: Folder[] = rawFolders.map(f => ({
+        const mappedFolders: Folder[] = rawFolders
+        .filter(f => !f.isVirtual)
+        .map(f => ({
           id: f.id,
           name: f.name,
           trackCount: f._count?.tracks ?? 0,
@@ -198,7 +200,7 @@ const [smartLoading, setSmartLoading] = useState(false)
   const tracksWithoutFolder = tracks.filter(t => !t.folderId).length
 
   // 🆕 Flag: pode montar setlist?
-  const canGenerateSetlist = isRealFolder(selectedFolderId)
+  const canGenerateSetlist = selectedFolderId === 'all' || isRealFolder(selectedFolderId)
   const folderName = canGenerateSetlist
     ? folders.find(f => f.id === selectedFolderId)?.name ?? 'pasta'
     : null

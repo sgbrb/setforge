@@ -80,7 +80,7 @@ export default function FolderList({
         >
           minhas pastas
         </p>
-        <button
+        {/*  <button
           onClick={() => setIsCreating(true)}
           title="Criar nova pasta"
           style={{
@@ -99,7 +99,7 @@ export default function FolderList({
           }}
         >
           +
-        </button>
+        </button> */}
       </div>
 
       {isCreating && (
