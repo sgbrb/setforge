@@ -28,8 +28,8 @@ export async function applyDiversity(
 
   const getFreshness = (trackId: string) => {
     const count = usageCount.get(trackId) || 0
-    if (count >= 3) return 0
-    return 100 - (count * 33)
+    if (count >= 5) return 0
+    return 100 - (count * 20)
   }
 
   // 2. Busca o POOL de substitutas (TODAS as faixas com segments do usuário)
@@ -46,13 +46,13 @@ export async function applyDiversity(
 
   let changes = 0
   const finalTracks = [...tracks]
-
+const usedIds = new Set(finalTracks.map(t => t.id)) // IDs já usados no set
   // 3. Loop de troca (MMR)
   for (let i = 0; i < finalTracks.length; i++) {
     const track = finalTracks[i]
     const freshness = getFreshness(track.id)
 
-    if (freshness < 50) {
+    if (false) {
       // Acha a posição anterior (pra calcular o score de mixagem)
       const prev = i > 0 ? finalTracks[i - 1] : null
       const next = i < finalTracks.length - 1 ? finalTracks[i + 1] : null
@@ -66,9 +66,10 @@ export async function applyDiversity(
         let bestScore = -1
 
         for (const c of candidates) {
+          if (usedIds.has(c.id)) continue;
           let score = 0
-          if (prev) score += getTransitionScore(prev, c)
-          if (next) score += getTransitionScore(c, next)
+          if (prev) score += getTransitionScore(prev!, c)
+          if (next) score += getTransitionScore(c, next!)
           score = score / (prev && next ? 2 : 1)
 
           if (score > bestScore) {
@@ -77,10 +78,11 @@ export async function applyDiversity(
           }
         }
 
-        if (bestCandidate && bestScore >= 60) {
+        if (bestCandidate && bestScore >= 75) {
           finalTracks[i] = bestCandidate as any
+          usedIds.add(bestCandidate!.id)
           changes++
-          console.log(`[diversity] Troca: ${track.title} → ${bestCandidate.title} (fresh ${freshness})`)
+          console.log(`[diversity] Troca: ${track.title} → ${bestCandidate!.title} (fresh ${freshness})`)
         }
       }
     }
