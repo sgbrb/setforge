@@ -231,10 +231,41 @@ const transitions = useMemo(() => {
     
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {/* 🆕 BOTÕES DE AÇÃO NO TOPO */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          onClick={exportPdf}
+          style={{
+            flex: 1,
+            minWidth: 160,
+            padding: '12px 20px',
+            background: 'var(--surface2)',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            color: 'var(--text)',
+            fontFamily: 'inherit',
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+          }}
+        >
+          📄 exportar PDF
+        </button>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <SaveToFolderButton
+            setlistId={setlist.id}
+            trackIds={setlist.setlist.map(t => t.id)}
+          />
+        </div>
+      </div>
           {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
           {tracksWithoutAnalysis.length > 0 && (
             <div style={{
-              padding: '12px 16px',
+              padding: '12px 16px',            
               background: 'var(--surface2)',
               border: '1px dashed var(--border)',
               borderRadius: 10,
@@ -429,64 +460,7 @@ const transitions = useMemo(() => {
       </div>
 
       
-{/* BOTÕES DE AÇÃO */}
-<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-  <button
-    onClick={exportPdf}
-    style={{
-      flex: 1,
-      minWidth: 180,
-      padding: '12px 20px',
-      background: 'var(--surface2)',
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      color: 'var(--text)',
-      fontFamily: 'inherit',
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-    }}
-  >
-    📄 exportar PDF
-  </button>
-
-  <div style={{ flex: 1, minWidth: 180 }}>
-    <SaveToFolderButton
-      setlistId={setlist.id}
-      trackIds={setlist.setlist.map(t => t.id)}
-    />
-  </div>
-
-  {onRegenerate && (
-    <button
-      onClick={onRegenerate}
-      style={{
-        flex: 1,
-        minWidth: 180,
-        padding: '12px 20px',
-        background: 'var(--surface2)',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        color: 'var(--text)',
-        fontFamily: 'inherit',
-        fontSize: 14,
-        fontWeight: 600,
-        cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-      }}
-    >
-      ⟳ gerar novamente
-    </button>
-  )}
-</div>
-        
+     
         
 
       

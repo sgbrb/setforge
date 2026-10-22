@@ -770,19 +770,7 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
               {canGenerateSetlist ? (
                 <>
                   <div style={{ display: 'flex', gap: 10 }}>
-                    <button
-                      onClick={generate}
-                      disabled={filteredTracks.length < 3 || loading}
-                      style={{
-                        ...btnStyle('primary'),
-                        flex: 1,
-                        justifyContent: 'center',
-                        opacity: filteredTracks.length < 3 ? 0.5 : 1,
-                        cursor: filteredTracks.length < 3 ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {loading ? '⟳ montando...' : `✦ montar setlist · ${folderName}`}
-                    </button>
+
 
                     <button
                       onClick={() => setSmartModalOpen(true)}
