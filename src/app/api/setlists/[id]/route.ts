@@ -43,7 +43,7 @@ export async function DELETE(
 /**
  * PATCH /api/setlists/:id
  * Atualiza campos do setlist (ex: folderId).
- * Body: { folderId?: string | null }
+ * Body: { folderId?: string | null, name?: string }
  */
 export async function PATCH(
   req: NextRequest,
@@ -57,7 +57,7 @@ export async function PATCH(
 
     const { id } = params
     const body = await req.json()
-    const { folderId } = body
+    const { folderId, name } = body
 
     // Confirma que o setlist é do usuário
     const setlist = await prisma.setlist.findFirst({
