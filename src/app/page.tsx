@@ -42,7 +42,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
 
   const [smartModalOpen, setSmartModalOpen] = useState(false)
-const [smartLoading, setSmartLoading] = useState(false)
+  const [smartLoading, setSmartLoading] = useState(false)
 
   const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
   const [durations, setDurations] = useState<Record<string, number>>({})
@@ -50,10 +50,8 @@ const [smartLoading, setSmartLoading] = useState(false)
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
   const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null)
 
-
   const [refreshKey, setRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<'library' | 'history'>('library')
-  
 
   // 🔒 Redireciona se não estiver logado
   useEffect(() => {
@@ -107,7 +105,7 @@ const [smartLoading, setSmartLoading] = useState(false)
       }
     }
 
-       loadTracks()
+    loadTracks()
   }, [status, refreshKey])
 
   // 📁 Carrega pastas do banco
@@ -126,13 +124,13 @@ const [smartLoading, setSmartLoading] = useState(false)
         const rawFolders: any[] = data.folders ?? []
 
         const mappedFolders: Folder[] = rawFolders
-        .filter(f => !f.isVirtual)
-        .map(f => ({
-          id: f.id,
-          name: f.name,
-          trackCount: f._count?.tracks ?? 0,
-          createdAt: f.createdAt,
-        }))
+          .filter(f => !f.isVirtual)
+          .map(f => ({
+            id: f.id,
+            name: f.name,
+            trackCount: f._count?.tracks ?? 0,
+            createdAt: f.createdAt,
+          }))
 
         setFolders(mappedFolders)
         console.log(`[page] Carregadas ${mappedFolders.length} pastas do banco`)
@@ -190,14 +188,11 @@ const [smartLoading, setSmartLoading] = useState(false)
     }
   }, [status, selectedFolderId])
 
-  // 🎯 Filtra faixas pela pasta selecionada
-  const filteredTracks = (() => {
-    if (selectedFolderId === 'all') return tracks
-    if (selectedFolderId === null) return tracks.filter(t => !t.folderId)
-    return tracks.filter(t => t.folderId === selectedFolderId)
-  })()
+  // 🎯 Filtra faixas: agora ignoramos a pasta, mostramos sempre TUDO
+  const filteredTracks = tracks
 
-  const tracksWithoutFolder = tracks.filter(t => !t.folderId).length
+  // 🆕 Força o tracksWithoutFolder para 0 (esconde o botão "sem pasta")
+  const tracksWithoutFolder = 0
 
   // 🆕 Flag: pode montar setlist?
   const canGenerateSetlist = selectedFolderId === 'all' || isRealFolder(selectedFolderId)
@@ -399,23 +394,24 @@ const [smartLoading, setSmartLoading] = useState(false)
   ) => {
     setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
     setDurations(prev => ({ ...prev, [trackId]: durationSec }))
-     // 🆕 Casar com faixa do setlist (por título + BPM)
-  // O upload chega com id temporário (upload-XXXXX). O setlist usa o Track.id real.
-  // Sem isso, a faixa analisada não some da lista "sem análise estrutural".
-  if (setlist) {
-    const uploaded = tracks.find(t => t.id === trackId)
-    if (uploaded) {
-      const match = setlist.setlist.find(st => 
-        normalizeTitle(st.title) === normalizeTitle(uploaded.title) &&
-        Math.abs((st.bpm || 0) - (uploaded.bpm || 0)) <= 2
-      )
-      if (match && match.id !== trackId) {
-        setAnalyses(prev => ({ ...prev, [match.id]: analysis }))
-        setDurations(prev => ({ ...prev, [match.id]: durationSec }))
-        console.log(`[page] Análise casada: "${uploaded.title}" → ${match.id}`)
+
+    // 🆕 Casar com faixa do setlist (por título + BPM)
+    // O upload chega com id temporário (upload-XXXXX). O setlist usa o Track.id real.
+    // Sem isso, a faixa analisada não some da lista "sem análise estrutural".
+    if (setlist) {
+      const uploaded = tracks.find(t => t.id === trackId)
+      if (uploaded) {
+        const match = setlist.setlist.find(st =>
+          normalizeTitle(st.title) === normalizeTitle(uploaded.title) &&
+          Math.abs((st.bpm || 0) - (uploaded.bpm || 0)) <= 2
+        )
+        if (match && match.id !== trackId) {
+          setAnalyses(prev => ({ ...prev, [match.id]: analysis }))
+          setDurations(prev => ({ ...prev, [match.id]: durationSec }))
+          console.log(`[page] Análise casada: "${uploaded.title}" → ${match.id}`)
+        }
       }
     }
-  }
 
     setTracks(prev => prev.map(t => {
       if (t.id !== trackId) return t
@@ -468,74 +464,74 @@ const [smartLoading, setSmartLoading] = useState(false)
       })
       .catch(err => console.warn('[page] Erro ao apagar análise:', err))
   }
-// ⚡ Fase 5.3 — gera setlist via TSP (/api/generate-smart-setlist)
+
+  // ⚡ Fase 5.3 — gera setlist via TSP (/api/generate-smart-setlist)
   // 📥 Fase 5.4c — upload do XML do Rekordbox
-  
 
-const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
-  setSmartLoading(true)
-  setSetlist(null)
-  try {
-    const res = await fetch('/api/generate-smart-setlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-  bpmTarget: filters.bpmTarget,
-  bpmRange: filters.bpmRange,
-  camelotStrict: filters.camelotStrict,
-  setSize: filters.setSize,
-  onlyAnalyzed: true,
-  folderId: selectedFolderId,
-}),
-    })
+  const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
+    setSmartLoading(true)
+    setSetlist(null)
+    try {
+      const res = await fetch('/api/generate-smart-setlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bpmTarget: filters.bpmTarget,
+          bpmRange: filters.bpmRange,
+          camelotStrict: filters.camelotStrict,
+          setSize: filters.setSize,
+          onlyAnalyzed: true,
+          folderId: 'all',
+        }),
+      })
 
-    if (res.status === 401) {
-      alert('Você precisa fazer login para gerar um setlist.')
-      window.location.href = '/login'
-      return
+      if (res.status === 401) {
+        alert('Você precisa fazer login para gerar um setlist.')
+        window.location.href = '/login'
+        return
+      }
+
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || 'Erro ao gerar setlist inteligente')
+        return
+      }
+
+      // Adapta resposta da nossa rota pro formato que SetlistView espera
+      const adapted: GeneratedSetlist = {
+        id: data.id,
+        setlist: data.tracks.map((t: any, i: number) => ({
+          ...t,
+          position: i + 1,
+          transitionNote: `score médio TSP: ${data.averageScore}/100`,
+        })),
+        analysis:
+          `Setlist gerado por TSP (nearest neighbor + 2-opt + or-opt). ` +
+          `${data.tracks.length} faixas de ${data.candidates} candidatas. ` +
+          (data.effectiveCount < data.requestedCount
+            ? `⚠️ Pedido: ${data.requestedCount} faixas · Entregue: ${data.effectiveCount} (limite de diversidade de Camelot). `
+            : '') +
+          `Score médio ${data.averageScore}/100, pior ${data.worstScore}/100. ` +
+          `Tempo ${data.elapsedMs}ms (${data.attempts} tentativa${data.attempts !== 1 ? 's' : ''}).`,
+        djTip:
+          data.duplicate
+            ? data.warning || 'Set repetido — tente mudar os filtros.'
+            : 'Setlist otimizado por algoritmo. Revise as transições antes de tocar.',
+        peakMoment: 'Análise de pico será gerada na Fase 3 (análise sob demanda).',
+        totalDuration: `${data.tracks.length}`,
+      }
+
+      setSetlist(adapted)
+      setSmartModalOpen(false)
+      console.log(`[page] Setlist inteligente: ${data.tracks.length} faixas, score ${data.averageScore}/100`)
+    } catch (error) {
+      console.error('[page] Erro no generate-smart:', error)
+      const msg = error instanceof Error ? error.message : 'Erro desconhecido'
+      alert(`Erro ao gerar setlist inteligente: ${msg}`)
+    } finally {
+      setSmartLoading(false)
     }
-
-    const data = await res.json()
-    if (!res.ok) {
-      alert(data.error || 'Erro ao gerar setlist inteligente')
-      return
-    }
-
-    // Adapta resposta da nossa rota pro formato que SetlistView espera
-    const adapted: GeneratedSetlist = {
-       id: data.id,      
-      setlist: data.tracks.map((t: any, i: number) => ({
-        ...t,
-        position: i + 1,
-        transitionNote: `score médio TSP: ${data.averageScore}/100`,
-      })),
-      analysis:
-        `Setlist gerado por TSP (nearest neighbor + 2-opt + or-opt). ` +
-        `${data.tracks.length} faixas de ${data.candidates} candidatas. ` +
-        (data.effectiveCount < data.requestedCount
-           ? `⚠️ Pedido: ${data.requestedCount} faixas · Entregue: ${data.effectiveCount} (limite de diversidade de Camelot). `
-    : '') +
-        `Score médio ${data.averageScore}/100, pior ${data.worstScore}/100. ` +
-        `Tempo ${data.elapsedMs}ms (${data.attempts} tentativa${data.attempts !== 1 ? 's' : ''}).`,
-      djTip:
-        data.duplicate
-          ? data.warning || 'Set repetido — tente mudar os filtros.'
-          : 'Setlist otimizado por algoritmo. Revise as transições antes de tocar.',
-      peakMoment: 'Análise de pico será gerada na Fase 3 (análise sob demanda).',
-      totalDuration: `${data.tracks.length}`,
-    }
-
-    setSetlist(adapted)
-    setSmartModalOpen(false)
-    console.log(`[page] Setlist inteligente: ${data.tracks.length} faixas, score ${data.averageScore}/100`)
-  } catch (error) {
-    console.error('[page] Erro no generate-smart:', error)
-    const msg = error instanceof Error ? error.message : 'Erro desconhecido'
-    alert(`Erro ao gerar setlist inteligente: ${msg}`)
-  } finally {
-    setSmartLoading(false)
   }
-}
 
   const handleOpenSetlist = async (setlistId: string) => {
     try {
@@ -556,6 +552,7 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
       alert('Erro ao abrir setlist')
     }
   }
+
   // 🎼 Gera setlist via IA
   const generate = async () => {
     // 🆕 Guarda-corpo: só gera se for pasta real
@@ -638,42 +635,41 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginLeft: 24 }}>
-  <button
-    onClick={() => setActiveTab('library')}
-    style={{
-      padding: '6px 14px',
-      borderRadius: 8,
-      border: activeTab === 'library' ? '1px solid var(--accent)' : '1px solid var(--border)',
-      background: activeTab === 'library' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
-      color: activeTab === 'library' ? 'var(--accent)' : 'var(--muted)',
-      fontSize: 12,
-      fontFamily: 'var(--font-mono, monospace)',
-      cursor: 'pointer',
-    }}
-  >
-    biblioteca
-  </button>
-  <button
-    onClick={() => setActiveTab('history')}
-    style={{
-      padding: '6px 14px',
-      borderRadius: 8,
-      border: activeTab === 'history' ? '1px solid var(--accent)' : '1px solid var(--border)',
-      background: activeTab === 'history' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
-      color: activeTab === 'history' ? 'var(--accent)' : 'var(--muted)',
-      fontSize: 12,
-      fontFamily: 'var(--font-mono, monospace)',
-      cursor: 'pointer',
-    }}
-  >
-    meus sets
-  </button>
-</div>
+          <button
+            onClick={() => setActiveTab('library')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: activeTab === 'library' ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: activeTab === 'library' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
+              color: activeTab === 'library' ? 'var(--accent)' : 'var(--muted)',
+              fontSize: 12,
+              fontFamily: 'var(--font-mono, monospace)',
+              cursor: 'pointer',
+            }}
+          >
+            biblioteca
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: activeTab === 'history' ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: activeTab === 'history' ? 'rgba(124, 92, 252, 0.15)' : 'transparent',
+              color: activeTab === 'history' ? 'var(--accent)' : 'var(--muted)',
+              fontSize: 12,
+              fontFamily: 'var(--font-mono, monospace)',
+              cursor: 'pointer',
+            }}
+          >
+            meus sets
+          </button>
+        </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {status === 'authenticated' ? (
             <>
-
               <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>● logado</span>
               <button
                 onClick={async () => {
@@ -725,90 +721,86 @@ const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
             </Panel>
           ) : (
             <>
-          
-          {activeTab === 'library' && (
-  <Panel title="biblioteca de músicas" badge={libraryBadge}>
-    <TrackUpload
-      onAddTrack={addTrack}
-      onAddAnalysis={handleAddAnalysis}
-      onQueueChange={setQueueStats}
-      libraryTracks={filteredTracks}
-    />
+              {activeTab === 'library' && (
+                <Panel title="biblioteca de músicas" badge={libraryBadge}>
+                  <TrackUpload
+                    onAddTrack={addTrack}
+                    onAddAnalysis={handleAddAnalysis}
+                    onQueueChange={setQueueStats}
+                    libraryTracks={filteredTracks}
+                  />
 
-    {filteredTracks.length > 0 && (
-            <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-        <button
-          onClick={() => setSmartModalOpen(true)}
-          disabled={loading}
-          style={{
-            ...btnStyle('secondary'),
-            flex: 1,
-            justifyContent: 'center',
-            cursor: loading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          gerar setlist SetForge
-        </button>
-        {/* <button
-          onClick={clearLibrary}
-          style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
-        >
-          limpar biblioteca
-        </button> */}
-      </div>
-    )}
+                  {filteredTracks.length > 0 && (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => setSmartModalOpen(true)}
+                        disabled={loading}
+                        style={{
+                          ...btnStyle('secondary'),
+                          flex: 1,
+                          justifyContent: 'center',
+                          cursor: loading ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        gerar SetForge
+                      </button>
+                      {/* <button
+                        onClick={clearLibrary}
+                        style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
+                      >
+                        limpar biblioteca
+                      </button> */}
+                    </div>
+                  )}
+                </Panel>
+              )}
 
-    {filteredTracks.length > 0 && (
-      <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-        <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
-          {selectedFolderId === 'all'
-            ? 'faixas na biblioteca (repositório de uploads)'
-            : selectedFolderId === null
-              ? 'faixas sem pasta'
-              : `faixas nesta pasta · ${folderName}`}
-        </p>
-        <TrackList
-          tracks={filteredTracks}
-          folders={folders}
-          analyses={analyses}
-          onRemove={removeTrack}
-          onMoveToFolder={moveTrackToFolder}
-          onDragStart={setDraggingTrackId}
-          onDragEnd={() => setDraggingTrackId(null)}
-          onClearAnalysis={clearAnalysis}
-          showAnalysis={selectedFolderId !== 'all'}
-        />
-      </div>
-    )}
-  </Panel>
-)}
-          {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
-          {canGenerateSetlist && (loading || setlist) && (
-            <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
-              {loading && (
-                <div style={{ textAlign: 'center', padding: 48 }}>
-                  <div style={{ width: 40, height: 40, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
-                  <p style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--muted)' }}>analisando harmonia e estrutura...</p>
-                  <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+              {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
+              {canGenerateSetlist && (loading || setlist) && (
+                <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
+                  {loading && (
+                    <div style={{ textAlign: 'center', padding: 48 }}>
+                      <div style={{ width: 40, height: 40, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
+                      <p style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--muted)' }}>analisando harmonia e estrutura...</p>
+                      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+                    </div>
+                  )}
+                  {setlist && (
+                    <SetlistView
+                      setlist={setlist}
+                      onRegenerate={generate}
+                      analyses={analyses}
+                      durations={durations}
+                      allTracks={tracks}
+                      allFolders={folders}
+                    />
+                  )}
+                </Panel>
+              )}
+
+              {filteredTracks.length > 0 && (
+                <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
+                  </p>
+                  <TrackList
+                    tracks={filteredTracks}
+                    folders={folders}
+                    analyses={analyses}
+                    onRemove={removeTrack}
+                    onMoveToFolder={moveTrackToFolder}
+                    onDragStart={setDraggingTrackId}
+                    onDragEnd={() => setDraggingTrackId(null)}
+                    onClearAnalysis={clearAnalysis}
+                    showAnalysis={selectedFolderId !== 'all'}
+                  />
                 </div>
               )}
-                            {setlist && (
-                <SetlistView
-                  setlist={setlist}
-                  onRegenerate={generate}
-                  analyses={analyses}
-                  durations={durations}
-                  allTracks={tracks}
-                  allFolders={folders}
-                />
-              )}
-            </Panel>
-          )}       
-                    </>
+            </>
           )}
         </main>
       </div>
-            <SmartSetlistModal
+
+      <SmartSetlistModal
         open={smartModalOpen}
         defaultSetSize={30}
         onClose={() => setSmartModalOpen(false)}

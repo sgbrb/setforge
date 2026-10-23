@@ -116,13 +116,13 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Penalidade por uso (Regra A quebrada em níveis)
-    const SETS_RECENT = 5
-    const SETS_MEDIUM = 20
-    const SETS_OLD = 50
-    const PENALTY_RECENT = 0.8
-    const PENALTY_MEDIUM = 0.5
-    const PENALTY_OLD = 0.2
+    // Penalidade por uso (Regra A)
+    const SETS_RECENT = 10      // Lembra dos últimos 10 sets
+    const SETS_MEDIUM = 30      // 30 sets
+    const SETS_OLD = 100        // 100 sets
+    const PENALTY_RECENT = 0.9  // Score cai 90% (praticamente banida)
+    const PENALTY_MEDIUM = 0.7  // Score cai 70%
+    const PENALTY_OLD = 0.4     // Score cai 40%
 
     const usagePenalty: Record<string, number> = {}
     for (let i = 0; i < recentSetlists.length; i++) {
@@ -188,6 +188,17 @@ export async function POST(req: NextRequest) {
       }
     })
 
+    // 🆕 DEDUPLICAÇÃO: Evita colocar a mesma faixa 2x no setlist (mesmo que ids sejam diferentes)
+    const uniqueLibraryMap = new Map<string, FrontendTrack>()
+    for (const track of library) {
+      const key = normalizeTitle(track.title)
+      if (!uniqueLibraryMap.has(key)) {
+        uniqueLibraryMap.set(key, track)
+      }
+    }
+    const uniqueLibrary = Array.from(uniqueLibraryMap.values())
+    console.log(`[dedup] Biblioteca: ${library.length} → ${uniqueLibrary.length} faixas únicas`)
+
     // 5. 🆕 FILTRO DE DIVERSIDADE (antes do TSP)
     const recentForDiversity = await prisma.setlist.findMany({
       where: { userId },
@@ -203,13 +214,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let filteredLibrary = library.filter(t => !usedIds.has(t.id))
+    // Agora usamos uniqueLibrary em vez de library
+    let filteredLibrary = uniqueLibrary.filter(t => !usedIds.has(t.id))
 
     if (filteredLibrary.length < 60) {
       console.log(`[diversity] Filtro muito agressivo (${filteredLibrary.length} faixas). Usando pool original.`)
-      filteredLibrary = library
+      filteredLibrary = uniqueLibrary
     } else {
-      console.log(`[diversity] Pool filtrado: ${library.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} gastas)`)
+      console.log(`[diversity] Pool filtrado: ${uniqueLibrary.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} gastas)`)
     }
 
     // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
