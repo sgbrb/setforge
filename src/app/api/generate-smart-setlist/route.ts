@@ -223,6 +223,14 @@ export async function POST(req: NextRequest) {
     } else {
       console.log(`[diversity] Pool filtrado: ${uniqueLibrary.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} gastas)`)
     }
+    // 🆕 TRAVA DE SEGURANÇA: Remove faixas duplicadas pelo TÍTULO para o TSP não repetir
+const uniqueTitles = new Set<string>();
+const cleanLibrary = filteredLibrary.filter(t => {
+  const normTitle = t.title.trim().toLowerCase();
+  if (uniqueTitles.has(normTitle)) return false;
+  uniqueTitles.add(normTitle);
+  return true;
+});
 
     // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
     const allTracksWithSegments = await prisma.track.findMany({
@@ -240,128 +248,106 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. LOOP DE RETRY
-    let lastResult: ReturnType<typeof generateSmartSet> | null = null
-    let lastSignature: ReturnType<typeof buildSetlistSignature> | null = null
-    let attemptUsed = 0
+    // 🆕 AUMENTAMOS AS TENTATIVAS: 50 seeds diferentes
+    const MAX_TENTATIVAS = 50; 
+    let lastResult: ReturnType<typeof generateSmartSet> | null = null;
+    let lastSignature: ReturnType<typeof buildSetlistSignature> | null = null;
+    let attemptUsed = 0;
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const seed = baseSeed + attempt
-      attemptUsed = attempt + 1
+    // 1. TENTA ACHAR O PADRÃO OURO (Score >= 80)
+    for (let attempt = 0; attempt < MAX_TENTATIVAS; attempt++) {
+      const seed = baseSeed + (attempt * 13); // Sementes variadas
+      attemptUsed = attempt + 1;
 
-      const result = generateSmartSet(filteredLibrary, {
+      const result = generateSmartSet(cleanLibrary, {
         count: setSize,
         bpmTarget,
         bpmRange,
         minCamelotScore,
         seed,
-        multiStart: 100,
+        multiStart: 500, // 🆕 Aumentado de 100 para 200
         twoOptPasses: 2,
         usagePenalty,
-      })
+        minTransitionScore: 80, // Força o padrão ouro
+      });
 
-      if (result.tracks.length === 0) {
-        return NextResponse.json(
-          {
-            error: 'Nenhuma faixa compatível com os filtros. Tenta aumentar o bpmRange ou tirar o camelotStrict.',
-            candidates: result.candidates,
-          },
-          { status: 400 }
-        )
+      // Se não achou faixas, ignora essa tentativa
+      if (result.tracks.length === 0) continue;
+
+      // 🆕 Só aceita se o set for 100% perfeito
+      if (!result.passedQualityCheck) {
+        // Se não for perfeito, guarda apenas se for MELHOR que o último guardado
+        if (!lastResult || result.worstScore > lastResult.worstScore) {
+            lastResult = result; 
+        }
+        continue;
       }
 
+      // Se passou no padrão ouro, verifica se não é duplicado
       const signature = buildSetlistSignature(
         result.tracks.map(t => ({ trackId: t.id, title: t.title }))
-      )
+      );
 
       const isDuplicate = recentSignatures.some(sig =>
         signaturesMatch(sig, signature)
-      )
+      );
 
       if (!isDuplicate) {
-        // 8. AUTO-FIX (tenta zerar transições ruins)
-        let finalTracks = result.tracks
-        let fixIterations = 1
-        let fixScore = result.averageScore
-
-        try {
-          const fixResult = await autoFixSetlist(
-            result.tracks,
-            analyses,
-            durations,
-            prisma,
-            userId,
-            3
-          )
-          finalTracks = fixResult.tracks
-          fixIterations = fixResult.iterations
-          fixScore = fixResult.finalScore
-          console.log(`[auto-fix] ${fixIterations} iterações · score final ${fixScore}`)
-        } catch (err) {
-          console.warn('[auto-fix] Falhou, usando set original:', err)
-        }
-
-        // 9. Salva no banco + retorna
-        const savedSetlist = await prisma.setlist.create({
-          data: {
-            name: `Smart · ${new Date().toLocaleDateString('pt-BR')}`,
-            eventType: 'Smart',
-            duration: 'auto',
-            energyCurve: 'auto',
-            audience: null,
-            analysis: `Setlist gerado por TSP · score médio ${fixScore}/100 · ${fixIterations} iteração(ões) auto-fix · ${attemptUsed} tentativa(s)`,
-            djTip: null,
-            peakMoment: null,
-            totalDuration: `${finalTracks.length} faixas`,
-            userId,
-            folderId: (typeof body.folderId === 'string' && body.folderId !== 'all') ? body.folderId : null,
-            tracks: {
-              create: finalTracks.map((t, i) => ({
-                position: i + 1,
-                trackId: t.id,
-                title: t.title,
-                artist: t.artist,
-                bpm: t.bpm,
-                key: t.key,
-                energy: t.energy,
-                transitionNote: null,
-              })),
-            },
-          },
-        })
-
-        return NextResponse.json({
-          id: savedSetlist.id,
-          tracks: finalTracks,
-          averageScore: fixScore,
-          worstScore: result.worstScore,
-          candidates: result.candidates,
-          requestedCount: result.requestedCount,
-          effectiveCount: result.effectiveCount,
-          elapsedMs: result.elapsedMs,
-          seed: result.seed,
-          attempts: attemptUsed,
-          autoFixIterations: fixIterations,
-          duplicate: false,
-          filters: {
-            bpmTarget,
-            bpmRange,
-            camelotStrict: !!body.camelotStrict,
-            setSize,
-          },
-        })
+        console.log(`[padrao-ouro] Sucesso na tentativa ${attemptUsed}! Score ${result.averageScore}/100`);
+        lastResult = result; 
+        break; // ACHOU! Pode parar de tentar.
       }
-
-      lastResult = result
-      lastSignature = signature
+      
+      lastResult = result;
     }
 
-    // 10. Todas as tentativas deram duplicado
-    if (!lastResult) {
-      return NextResponse.json(
-        { error: 'Não foi possível gerar nenhum setlist.' },
-        { status: 500 }
-      )
+    // 2. FALLBACK: Se não achou o padrão ouro de 80, tenta relaxar para 75
+    let finalResult = lastResult;
+    if (!finalResult || !finalResult.passedQualityCheck) {
+       console.warn(`[padrao-ouro] Falhou em 50 tentativas. Tentando relaxar para 75...`);
+       
+       for (let attempt = 0; attempt < 20; attempt++) {
+         const seed = baseSeed + (attempt * 13); // 🆕 Sementes variadas também no fallback
+         const relaxedResult = generateSmartSet(cleanLibrary, {
+           count: setSize, bpmTarget, bpmRange, minCamelotScore, seed,
+           multiStart: 200, // 🆕 Aumentado
+           twoOptPasses: 2, usagePenalty, minTransitionScore: 75,
+         });
+         
+         // 🆕 Guarda se for melhor que o que já temos
+         if (relaxedResult.tracks.length > 0 && (!finalResult || relaxedResult.worstScore > finalResult.worstScore)) {
+            finalResult = relaxedResult;
+         }
+         
+         // Se por acaso ele achar um set 100% perfeito no fallback (milagre), para de tentar
+         if (relaxedResult.passedQualityCheck) break; 
+       }
+    }
+
+    if (!finalResult || finalResult.tracks.length === 0) {
+       return NextResponse.json({ 
+         error: 'Não foi possível montar o set.',
+         suggestion: 'Sua biblioteca não tem faixas compatíveis para este BPM/Tom. Tente mudar o BPM alvo ou aumentar o Range.'
+       }, { status: 400 });
+    }
+    // 3. SALVA E RETORNA (A partir daqui, o código é o mesmo que você já tem)
+    const signature = buildSetlistSignature(
+      finalResult.tracks.map(t => ({ trackId: t.id, title: t.title }))
+    );
+    const isDuplicate = recentSignatures.some(sig => signaturesMatch(sig, signature));
+
+    let finalTracks = finalResult.tracks;
+    let fixIterations = 1;
+    let fixScore = finalResult.averageScore;
+
+    try {
+      const fixResult = await autoFixSetlist(finalResult.tracks, analyses, durations, prisma, userId, 3);
+      finalTracks = fixResult.tracks;
+      fixIterations = fixResult.iterations;
+      fixScore = fixResult.finalScore;
+      console.log(`[auto-fix] ${fixIterations} iterações · score final ${fixScore}`);
+    } catch (err) {
+      console.warn('[auto-fix] Falhou, usando set original:', err);
     }
 
     const savedSetlist = await prisma.setlist.create({
@@ -371,22 +357,16 @@ export async function POST(req: NextRequest) {
         duration: 'auto',
         energyCurve: 'auto',
         audience: null,
-        analysis: `Setlist gerado por TSP (duplicata após ${attemptUsed} tentativas) · score médio ${lastResult.averageScore}/100`,
+        analysis: `Setlist gerado por TSP (Padrão Ouro) · score médio ${fixScore}/100 · ${attemptUsed} tentativa(s)`,
         djTip: null,
         peakMoment: null,
-        totalDuration: `${lastResult.tracks.length} faixas`,
+        totalDuration: `${finalTracks.length} faixas`,
         userId,
         folderId: (typeof body.folderId === 'string' && body.folderId !== 'all') ? body.folderId : null,
         tracks: {
-          create: lastResult.tracks.map((t, i) => ({
-            position: i + 1,
-            trackId: t.id,
-            title: t.title,
-            artist: t.artist,
-            bpm: t.bpm,
-            key: t.key,
-            energy: t.energy,
-            transitionNote: null,
+          create: finalTracks.map((t, i) => ({
+            position: i + 1, trackId: t.id, title: t.title, artist: t.artist,
+            bpm: t.bpm, key: t.key, energy: t.energy, transitionNote: null,
           })),
         },
       },
@@ -394,30 +374,26 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       id: savedSetlist.id,
-      tracks: lastResult.tracks,
-      averageScore: lastResult.averageScore,
-      worstScore: lastResult.worstScore,
-      candidates: lastResult.candidates,
-      requestedCount: lastResult.requestedCount,
-      effectiveCount: lastResult.effectiveCount,
-      elapsedMs: lastResult.elapsedMs,
-      seed: lastResult.seed,
+      tracks: finalTracks,
+      averageScore: fixScore,
+      worstScore: finalResult.worstScore,
+      candidates: finalResult.candidates,
+      requestedCount: finalResult.requestedCount,
+      effectiveCount: finalResult.effectiveCount,
+      elapsedMs: finalResult.elapsedMs,
+      seed: finalResult.seed,
       attempts: attemptUsed,
-      duplicate: true,
-      warning: `Esse set já apareceu nos últimos ${RECENT_SETLISTS_FOR_EQUALITY} setlists. Tentei ${MAX_RETRIES} seeds diferentes mas todas geraram o mesmo conjunto. Tenta mudar os filtros (BPM/Camelot) ou aumenta a biblioteca.`,
-      filters: {
-        bpmTarget,
-        bpmRange,
-        camelotStrict: !!body.camelotStrict,
-        setSize,
-      },
+      autoFixIterations: fixIterations,
+      duplicate: isDuplicate,
+      warning: isDuplicate ? `Esse set já apareceu nos últimos ${RECENT_SETLISTS_FOR_EQUALITY} setlists.` : undefined,
+      filters: { bpmTarget, bpmRange, camelotStrict: !!body.camelotStrict, setSize },
     })
-  } catch (error) {
-    console.error('[api/generate-smart-setlist] Erro:', error)
-    const message = error instanceof Error ? error.message : 'Erro desconhecido'
-    return NextResponse.json(
-      { error: `Erro: ${message}` },
-      { status: 500 }
-    )
+        } catch (error) {
+      console.error('[api/generate-smart-setlist] Erro:', error)
+      const message = error instanceof Error ? error.message : 'Erro desconhecido'
+      return NextResponse.json(
+        { error: `Erro: ${message}` },
+        { status: 500 }
+      )
+    }
   }
-}

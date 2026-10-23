@@ -490,7 +490,17 @@ export default function Home() {
         window.location.href = '/login'
         return
       }
-
+            // 🆕 TRATAMENTO DO PADRÃO OURO (422)
+      if (res.status === 422) {
+        const data = await res.json()
+        alert(
+          `⚠️ ${data.error}\n\n${data.details}\n\n💡 ${data.suggestion}`
+        )
+        setSmartModalOpen(false)
+        setSmartLoading(false) // <-- Importante para tirar o loading do botão
+        return
+      }
+      
       const data = await res.json()
       if (!res.ok) {
         alert(data.error || 'Erro ao gerar setlist inteligente')

@@ -29,12 +29,15 @@ export interface TspOptions {
   multiStart?: number
   twoOptPasses?: number
   usagePenalty?: Record<string, number>
+  minTransitionScore?: number // 🆕 Padrão Ouro
 }
 
 export interface TspResult {
   tracks: Track[]
   averageScore: number
   worstScore: number
+  worstTransition?: { fromTitle: string; toTitle: string; score: number } // 🆕
+  passedQualityCheck: boolean // 🆕
   candidates: number
   requestedCount: number
   effectiveCount: number
@@ -61,21 +64,12 @@ function mulberry32(seed: number): () => number {
 // FASE 1 — PRÉ-FILTRO
 // ============================================================
 
-/**
- * Pré-filtro de candidatas.
- *
- * Estratégia (sem achismo):
- *   1. Filtra por BPM (± range)
- *   2. Encontra as N keys "núcleo" (mais comuns no pool)
- *   3. Mantém faixas cujas keys sejam núcleo OU vizinhas
- */
 export function filterCandidates(
   library: Track[],
   bpmTarget: number | null,
   bpmRange: number,
   minCamelotScore: number
 ): Track[] {
-  // 1. Filtro de BPM
   let pool = library.filter(t => t.bpm > 0)
 
   if (bpmTarget !== null) {
@@ -84,14 +78,12 @@ export function filterCandidates(
 
   if (pool.length === 0) return []
 
-  // 2. Conta frequência de cada key
   const keyCounts = new Map<string, number>()
   for (const t of pool) {
     if (!t.key) continue
     keyCounts.set(t.key, (keyCounts.get(t.key) || 0) + 1)
   }
 
-  // 3. Eleição das keys "núcleo" (top 8, mínimo 2% do pool)
   const minCount = Math.max(5, Math.floor(pool.length * 0.02))
   const coreKeys = [...keyCounts.entries()]
     .filter(([, count]) => count >= minCount)
@@ -101,7 +93,6 @@ export function filterCandidates(
 
   if (coreKeys.length === 0) return pool
 
-  // 4. Expande o núcleo pra incluir vizinhas (adjacente + relativa)
   const allowedKeys = new Set<string>()
 
   for (const k of coreKeys) {
@@ -112,47 +103,30 @@ export function filterCandidates(
 
     if (isNaN(num)) continue
 
-    // Relativa
     const relativeLetter = letter === 'A' ? 'B' : 'A'
     allowedKeys.add(`${num}${relativeLetter}`)
 
-    // Adjacentes
     const prev = num === 1 ? 12 : num - 1
     const next = num === 12 ? 1 : num + 1
     allowedKeys.add(`${prev}${letter}`)
     allowedKeys.add(`${next}${letter}`)
   }
 
-  // 5. Filtra pool pelas keys permitidas
   return pool.filter(t => allowedKeys.has(t.key))
 }
-
-// ============================================================
-// FASE 2 — CONSTRUÇÃO GREEDY (nearest neighbor)
-// ============================================================
 
 // ============================================================
 // FASE 1.5 — DIVERSIDADE (Regra 3)
 // ============================================================
 
-/**
- * Filtra o pool pra garantir diversidade de famílias (1-12).
- *
- * Regra rígida:
- *   - Máx N faixas por key (A ou B) da família
- *   - N = max(1, floor(setSize / 15))
- *   - Sem +1 (nem key individual nem família podem estourar)
- *
- * Ex: setSize=30 → N=2 → máx 2x 12A + 2x 12B = 4 faixas da família 12
- */
 export function diversifyPool(
   pool: Track[],
   setSize: number
 ): Track[] {
 
-  const maxPorLetra = Math.max(1, Math.floor(setSize / 10))
+  // 🆕 Aumentado de /10 para /5 para dar mais opções ao TSP
+  const maxPorLetra = Math.max(1, Math.floor(setSize / 5))
 
-  // Agrupa por família (só o número, ignora A/B)
   const byFamilia = new Map<string, Track[]>()
   for (const t of pool) {
     const m = (t.key || '').match(/^(\d+)/)
@@ -164,8 +138,7 @@ export function diversifyPool(
 
   const result: Track[] = []
 
-    for (const tracks of byFamilia.values()) {
-    // Separa A e B
+  for (const tracks of byFamilia.values()) {
     const a: Track[] = []
     const b: Track[] = []
     for (const t of tracks) {
@@ -173,7 +146,7 @@ export function diversifyPool(
       else if (t.key.endsWith('B')) b.push(t)
     }
 
-        const useA = a.slice(0, maxPorLetra)
+    const useA = a.slice(0, maxPorLetra)
     const useB = b.slice(0, maxPorLetra)
     result.push(...useA, ...useB)
   }
@@ -181,11 +154,16 @@ export function diversifyPool(
   return result
 }
 
+// ============================================================
+// FASE 2 — CONSTRUÇÃO GREEDY
+// ============================================================
+
 function nearestNeighbor(
   pool: Track[],
   startIdx: number,
   count: number,
-  usagePenalty?: Record<string, number>
+  usagePenalty?: Record<string, number>,
+  minTransitionScore?: number
 ): Track[] {
   if (pool.length === 0) return []
   if (pool.length <= count) return [...pool]
@@ -200,9 +178,29 @@ function nearestNeighbor(
 
     for (let i = 0; i < remaining.length; i++) {
       const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty)
+      
+      // 🆕 PADRÃO OURO: ignora transições abaixo do limite
+      if (minTransitionScore !== undefined && score < minTransitionScore) {
+        continue
+      }
+
+          // 🆕 Penaliza transições abaixo de 80: se o score for ruim, ele nem considera
+      if (score < 80) continue; 
+      
       if (score > bestScore) {
         bestScore = score
         bestIdx = i
+      }
+    }
+
+    // Se nenhuma candidata passou no padrão ouro, pega a melhor possível (fallback)
+    if (bestScore === -1) {
+      for (let i = 0; i < remaining.length; i++) {
+        const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty)
+        if (score > bestScore) {
+          bestScore = score
+          bestIdx = i
+        }
       }
     }
 
@@ -230,7 +228,8 @@ function scoreOrder(tracks: Track[], usagePenalty?: Record<string, number>): num
 function twoOpt(
   tracks: Track[],
   passes: number,
-usagePenalty?: Record<string, number>
+  usagePenalty?: Record<string, number>,
+  minTransitionScore?: number
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
@@ -248,6 +247,21 @@ usagePenalty?: Record<string, number>
           ...best.slice(i + 1, j + 1).reverse(),
           ...best.slice(j + 1),
         ]
+        
+        // 🆕 Verifica se o candidato viola o padrão ouro
+        let violates = false
+        if (minTransitionScore !== undefined) {
+          for (let k = 0; k < candidate.length - 1; k++) {
+            const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty)
+            if (s < minTransitionScore) {
+              violates = true
+              break
+            }
+          }
+        }
+
+        if (violates) continue
+
         const candidateScore = scoreOrder(candidate, usagePenalty)
 
         if (candidateScore > bestScore) {
@@ -271,7 +285,8 @@ usagePenalty?: Record<string, number>
 function orOpt(
   tracks: Track[],
   maxBlockSize: number = 3,
-  usagePenalty?: Record<string, number>
+  usagePenalty?: Record<string, number>,
+  minTransitionScore?: number
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
@@ -290,6 +305,21 @@ function orOpt(
 
         for (let j = 0; j < rest.length; j++) {
           const candidate = [...rest.slice(0, j), ...block, ...rest.slice(j)]
+          
+          // 🆕 Verifica se o candidato viola o padrão ouro
+          let violates = false
+          if (minTransitionScore !== undefined) {
+            for (let k = 0; k < candidate.length - 1; k++) {
+              const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty)
+              if (s < minTransitionScore) {
+                violates = true
+                break
+              }
+            }
+          }
+
+          if (violates) continue
+
           const candidateScore = scoreOrder(candidate, usagePenalty)
 
           if (candidateScore > bestScore) {
@@ -323,45 +353,35 @@ export function generateSmartSet(
   const multiStart = options.multiStart ?? 100
   const twoOptPasses = options.twoOptPasses ?? 2
   const usagePenalty = options.usagePenalty
+  const minTransitionScore = options.minTransitionScore // 🆕
 
-  // FASE 1 — PRÉ-FILTRO
-    const filtered = filterCandidates(
-    library,
-    bpmTarget,
-    bpmRange,
-    minCamelotScore
-  )
-
-  // FASE 1.5 — DIVERSIDADE (Regra 3)
+  const filtered = filterCandidates(library, bpmTarget, bpmRange, minCamelotScore)
   const diversified = diversifyPool(filtered, count)
+  const effectiveCount = Math.min(count, diversified.length)
 
-// ⚠️ B2: se a diversidade não permite count, REDUZ o count
-// ao máximo que a regra A1 permite. Não volta pra 'filtered
-const effectiveCount = Math.min(count, diversified.length)
-
-if (effectiveCount === 0) {
-  return {
-    tracks: [],
-    averageScore: 0,
-    worstScore: 0,
-    candidates: 0,
-    requestedCount: count,  
-    effectiveCount: 0, 
-    elapsedMs: Date.now() - startTime,
-    seed,
+  if (effectiveCount === 0) {
+    return {
+      tracks: [],
+      averageScore: 0,
+      worstScore: 0,
+      passedQualityCheck: false,
+      candidates: 0,
+      requestedCount: count,
+      effectiveCount: 0,
+      elapsedMs: Date.now() - startTime,
+      seed,
+    }
   }
-}
 
-const candidates = diversified
+  const candidates = diversified
 
-  // FASE 2 — MULTI-START
   const rng = mulberry32(seed)
   let bestOrder: Track[] = []
   let bestScore = -1
 
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
-    const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty)
+    const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty, minTransitionScore)
     const score = scoreOrder(order, usagePenalty)
 
     if (score > bestScore) {
@@ -370,19 +390,24 @@ const candidates = diversified
     }
   }
 
-  // FASE 3 — 2-OPT
-  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty)
+  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, minTransitionScore)
   bestScore = scoreOrder(bestOrder, usagePenalty)
 
-  // FASE 4 — OR-OPT
-  bestOrder = orOpt(bestOrder, 3, usagePenalty)
+  bestOrder = orOpt(bestOrder, 3, usagePenalty, minTransitionScore)
   bestScore = scoreOrder(bestOrder, usagePenalty)
 
   // MÉTRICAS
   let worst = 100
+  let worstFromTitle = ''
+  let worstToTitle = ''
+
   for (let i = 0; i < bestOrder.length - 1; i++) {
     const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], i, bestOrder.length, usagePenalty)
-    if (s < worst) worst = s
+    if (s < worst) {
+      worst = s
+      worstFromTitle = bestOrder[i].title
+      worstToTitle = bestOrder[i + 1].title
+    }
   }
 
   const averageScore =
@@ -390,10 +415,19 @@ const candidates = diversified
       ? Math.round(bestScore / (bestOrder.length - 1))
       : 0
 
+  // 🆕 PADRÃO OURO: verifica se o caminho final passou no limite
+  const passedQualityCheck = minTransitionScore === undefined || worst >= minTransitionScore
+
   return {
     tracks: bestOrder,
     averageScore,
     worstScore: worst,
+    worstTransition: passedQualityCheck ? undefined : {
+      fromTitle: worstFromTitle,
+      toTitle: worstToTitle,
+      score: worst,
+    },
+    passedQualityCheck,
     candidates: candidates.length,
     requestedCount: count,
     effectiveCount,

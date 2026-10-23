@@ -52,8 +52,8 @@ export function getBpmCompatibility(bpmA: number, bpmB: number): number {
 
   const diff = Math.abs(bpmA - bpmB)
 
-  if (diff <= 3) return 100
-  if (diff <= 6) return 80
+  if (diff <= 2) return 100
+  if (diff <= 5) return 85
   if (diff <= 10) return 60
   return 30
 }
@@ -110,13 +110,13 @@ export function getTransitionScore(
   const camelot = getCamelotCompatibility(trackA.key, trackB.key)
   const bpm = getBpmCompatibility(trackA.bpm, trackB.bpm)
 
-  // Energia-alvo da próxima posição (trackB vai entrar aqui)
   const targetEnergy = getTargetEnergy(position + 1, total)
   const energyB = (trackB as any).energy
   const energyCompat = getEnergyCompatibility(energyB, targetEnergy)
 
-  // Score final: 45% Camelot + 25% BPM + 30% Energia
-  const baseScore = camelot * 0.45 + bpm * 0.25 + energyCompat * 0.30
+  // 🆕 Score final: 55% Camelot + 30% BPM + 15% Energia
+  // Diminuímos o peso da energia para evitar que a curva estrague transições harmônicas.
+  const baseScore = camelot * 0.60 + bpm * 0.30 + energyCompat * 0.10
 
   if (usagePenalty) {
     const pA = usagePenalty[trackA.id] ?? 0
