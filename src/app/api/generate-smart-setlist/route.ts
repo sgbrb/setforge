@@ -199,11 +199,11 @@ export async function POST(req: NextRequest) {
     const uniqueLibrary = Array.from(uniqueLibraryMap.values())
     console.log(`[dedup] Biblioteca: ${library.length} → ${uniqueLibrary.length} faixas únicas`)
 
-    // 5. 🆕 FILTRO DE DIVERSIDADE (antes do TSP)
+    // 5. 🆕 FILTRO DE DIVERSIDADE E ROTAÇÃO (antes do TSP)
     const recentForDiversity = await prisma.setlist.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      take: 3,
+      take: 20, 
       include: { tracks: { select: { trackId: true } } },
     })
 
@@ -214,23 +214,25 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Agora usamos uniqueLibrary em vez de library
+    // 🆕 Lógica de Rotação: Se a biblioteca for grande, remove as usadas recentemente
     let filteredLibrary = uniqueLibrary.filter(t => !usedIds.has(t.id))
 
     if (filteredLibrary.length < 60) {
-      console.log(`[diversity] Filtro muito agressivo (${filteredLibrary.length} faixas). Usando pool original.`)
+      console.log(`[rotation] Poucas faixas após filtrar os últimos 5 sets (${filteredLibrary.length}). Usando pool original.`)
       filteredLibrary = uniqueLibrary
     } else {
-      console.log(`[diversity] Pool filtrado: ${uniqueLibrary.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} gastas)`)
+      console.log(`[rotation] Pool filtrado: ${uniqueLibrary.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} usadas nos últimos sets)`)
     }
+     // 🆕 Log para ver quantas músicas foram banidas da rotação
+    console.log(`[rotation] Removidas ${usedIds.size} faixas usadas nos últimos 20 sets.`);
     // 🆕 TRAVA DE SEGURANÇA: Remove faixas duplicadas pelo TÍTULO para o TSP não repetir
-const uniqueTitles = new Set<string>();
-const cleanLibrary = filteredLibrary.filter(t => {
-  const normTitle = t.title.trim().toLowerCase();
-  if (uniqueTitles.has(normTitle)) return false;
-  uniqueTitles.add(normTitle);
-  return true;
-});
+    const uniqueTitles = new Set<string>();
+    const cleanLibrary = filteredLibrary.filter(t => {
+      const normTitle = t.title.trim().toLowerCase();
+      if (uniqueTitles.has(normTitle)) return false;
+      uniqueTitles.add(normTitle);
+      return true;
+    });
 
     // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
     const allTracksWithSegments = await prisma.track.findMany({

@@ -37,7 +37,65 @@ export default function SetlistView({
 }: SetlistViewProps) {
  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
   const [showMatrix, setShowMatrix] = useState(false)
+  // 🆕 Função para trocar a faixa
+  const [isReplacing, setIsReplacing] = useState<number | null>(null)
 
+  const handleReplaceTrack = async (index: number) => {
+    setIsReplacing(index)
+    try {
+      const res = await fetch('/api/setlist/replace-track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          setlistId: setlist.id, 
+          positionToReplace: index + 1 
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao trocar')
+
+      // Atualiza a tela com a nova faixa
+      const newSetlist = { ...setlist }
+      newSetlist.setlist[index] = {
+        ...newSetlist.setlist[index],
+        id: data.newTrack.id,
+        title: data.newTrack.title,
+        artist: data.newTrack.artist,
+        bpm: data.newTrack.bpm,
+        key: data.newTrack.key,
+        energy: data.newTrack.energy,
+      }
+      
+      // Atualiza o estado
+      window.location.reload() // Solução simples para atualizar a tela agora
+      
+    } catch (err: any) {
+      alert(err.message || 'Erro ao trocar faixa')
+    } finally {
+      setIsReplacing(null)
+    }
+  }
+   // 🆕 2. Função para EXPANDIR o set inteiro (nova, cole logo abaixo da de cima)
+  const handleExpandSet = async () => {
+    const amount = prompt('Quantas faixas a mais você quer adicionar ao final do set?', '10')
+    if (!amount) return
+    
+    try {
+      const res = await fetch('/api/setlist/extend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setlistId: setlist.id, additionalTracks: Number(amount) }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      
+      alert('Set expandido com sucesso!')
+      window.location.reload()
+    } catch (err: any) {
+      alert(err.message)
+    }
+  }
   // 📋 Fase 5.6 — faixas do setlist SEM análise estrutural
   const tracksWithoutAnalysis = useMemo(() => {
     if (!analyses) return setlist.setlist
@@ -208,6 +266,17 @@ const transitions = useMemo(() => {
           />
         </div>
       </div>
+              <button
+          onClick={handleExpandSet}
+          style={{
+            flex: 1, minWidth: 160, padding: '12px 20px',
+            background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+            border: 'none', borderRadius: 10, color: '#fff',
+            fontSize: 14, fontWeight: 600, cursor: 'pointer',
+          }}
+        >
+          ➕ expandir set
+        </button>
           {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
           {tracksWithoutAnalysis.length > 0 && (
             <div style={{
@@ -359,6 +428,8 @@ const transitions = useMemo(() => {
                   track={track}
                   index={i}
                   entryOffset={transition?.startOffsetA}
+                  onReplace={() => handleReplaceTrack(i)} // 🆕 Adicionado aqui
+                  isReplacing={isReplacing === i} // 🆕 Adicionado aqui
                 />
 
                 {!isLast && transition && (
@@ -422,10 +493,14 @@ function TrackRow({
   track,
   index,
   entryOffset,
+  onReplace,
+  isReplacing,
 }: {
   track: any
   index: number
   entryOffset?: number
+  onReplace?: () => void
+  isReplacing?: boolean
 }) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
     : track.energy >= 6 ? 'var(--yellow)'
@@ -531,6 +606,27 @@ function TrackRow({
             />
           ))}
         </div>
+
+        {onReplace && (
+          <button
+            onClick={onReplace}
+            disabled={isReplacing}
+            title="Substituir esta faixa"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              color: isReplacing ? 'var(--muted)' : 'var(--text)',
+              padding: '4px 8px',
+              fontSize: 12,
+              cursor: isReplacing ? 'not-allowed' : 'pointer',
+              marginLeft: 8,
+              opacity: isReplacing ? 0.5 : 1,
+            }}
+          >
+            {isReplacing ? '⟳' : '🔄'}
+          </button>
+        )}
       </div>
     </div>
   )
