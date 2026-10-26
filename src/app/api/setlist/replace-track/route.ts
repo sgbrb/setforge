@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { setlistId, positionToReplace } = body
 
-    // 1. Carrega o setlist atual
+    // 1. Carrega o setlist
     const setlist = await prisma.setlist.findUnique({
       where: { id: setlistId },
       include: { tracks: { orderBy: { position: 'asc' } } },
@@ -23,40 +23,61 @@ export async function POST(req: NextRequest) {
 
     if (!setlist) return NextResponse.json({ error: 'Setlist não encontrado' }, { status: 404 })
 
+    // 🆕 Lê a lista de músicas rejeitadas do banco
+    const rejectedIds = setlist.rejectedTrackIds
+      ? setlist.rejectedTrackIds.split(',').filter(Boolean)
+      : []
+
     const tracks = setlist.tracks
     const index = positionToReplace - 1
     const prevTrack = index > 0 ? tracks[index - 1] : null
     const nextTrack = index < tracks.length - 1 ? tracks[index + 1] : null
 
-    // 2. Busca candidatas no banco (que não estão no set)
+    // 2. Pega os IDs dos últimos 20 sets
+    const recentSets = await prisma.setlist.findMany({
+      where: { userId: session.user.id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { tracks: { select: { trackId: true } } },
+    })
+    const usedIds = new Set<string>()
+    for (const s of recentSets) {
+      for (const t of s.tracks) {
+        if (t.trackId) usedIds.add(t.trackId)
+      }
+    }
+
+    // 3. Busca as candidatas
     const currentIds = tracks.map(t => t.trackId).filter(Boolean) as string[]
-    const candidates = await prisma.track.findMany({
+    const allBlocked = [...currentIds, ...rejectedIds]
+
+    const allCandidates = await prisma.track.findMany({
       where: {
         userId: session.user.id,
-        id: { notIn: currentIds },
+        id: { notIn: allBlocked },
         segments: { not: Prisma.DbNull },
       },
       select: { id: true, title: true, artist: true, bpm: true, key: true, segments: true, durationSec: true },
     })
 
-    if (candidates.length === 0) {
-      return NextResponse.json({ error: 'Nenhuma faixa disponível no banco para substituição.' }, { status: 400 })
+    // 4. Separa novas e repetidas
+    const freshCandidates = allCandidates.filter(c => !usedIds.has(c.id))
+
+    if (freshCandidates.length === 0) {
+      return NextResponse.json({
+        error: 'Não há faixas inéditas para este BPM/Tom. Tente aumentar o BPM Range.'
+      }, { status: 400 })
     }
 
-    // 3. Calcula a melhor substituta (olhando o mix point com a anterior e a próxima)
+    // 5. Acha a melhor
     let bestCandidate = null
     let bestScore = -1
 
-    for (const c of candidates) {
+    for (const c of freshCandidates) {
       let score = 0
-      if (prevTrack) {
-        score += getTransitionScore(prevTrack as any, c as any, index - 1, tracks.length)
-      }
-      if (nextTrack) {
-        score += getTransitionScore(c as any, nextTrack as any, index, tracks.length)
-      }
+      if (prevTrack) score += getTransitionScore(prevTrack as any, c as any, index - 1, tracks.length)
+      if (nextTrack) score += getTransitionScore(c as any, nextTrack as any, index, tracks.length)
 
-      // Penaliza se a energia estiver muito fora da curva
       const targetEnergy = getTargetEnergy(index + 1, tracks.length)
       const cEnergy = (c.segments as any)?.energy || 0
       if (Math.abs(cEnergy - targetEnergy) > 2) score -= 15
@@ -71,7 +92,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Nenhuma substituta boa encontrada.' }, { status: 400 })
     }
 
-    // 4. Atualiza a faixa no banco
+    // 🆕 Salva a música escolhida na lista de rejeitadas do banco
+    const newRejectedIds = [...rejectedIds, bestCandidate.id].join(',')
+
+    await prisma.setlist.update({
+      where: { id: setlistId },
+      data: { rejectedTrackIds: newRejectedIds }
+    })
+
+    // Atualiza a faixa
     await prisma.setlistTrack.update({
       where: { id: tracks[index].id },
       data: {

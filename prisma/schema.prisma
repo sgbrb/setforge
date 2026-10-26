@@ -73,23 +73,24 @@ model Track {
 }
 
 model Setlist {
-  id            String         @id @default(cuid())
-  name          String
-  eventType     String
-  duration      String
-  energyCurve   String
-  audience      String?
-  analysis      String?
-  djTip         String?
-  peakMoment    String?
-  totalDuration String?
-  userId        String
-  folderId      String?
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  folder        Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  tracks        SetlistTrack[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id               String         @id @default(cuid())
+  name             String
+  eventType        String
+  duration         String
+  energyCurve      String
+  audience         String?
+  analysis         String?
+  djTip            String?
+  peakMoment       String?
+  totalDuration    String?
+  userId           String
+  folderId         String?
+  rejectedTrackIds String?        // 🆕 Adicionado aqui (dentro do modelo)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder           Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tracks           SetlistTrack[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@index([userId])
   @@index([folderId])

@@ -198,8 +198,8 @@ export async function POST(req: NextRequest) {
     }
     const uniqueLibrary = Array.from(uniqueLibraryMap.values())
     console.log(`[dedup] Biblioteca: ${library.length} → ${uniqueLibrary.length} faixas únicas`)
-
-    // 5. 🆕 FILTRO DE DIVERSIDADE E ROTAÇÃO (antes do TSP)
+        // 5. 🆕 FILTRO DE ROTAÇÃO AGRESSIVO
+    // Pega os últimos 20 sets para bloquear
     const recentForDiversity = await prisma.setlist.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -214,18 +214,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 🆕 Lógica de Rotação: Se a biblioteca for grande, remove as usadas recentemente
+    // 🆕 TRAVA DURA: Remove TOTALMENTE as músicas usadas nos últimos 20 sets.
+    // Diferente do antigo, não voltamos pro "uniqueLibrary" se ficar pequeno.
     let filteredLibrary = uniqueLibrary.filter(t => !usedIds.has(t.id))
+    console.log(`[rotation] Removidas ${usedIds.size} faixas dos últimos 20 sets. Restaram ${filteredLibrary.length} para o TSP.`)
 
-    if (filteredLibrary.length < 60) {
-      console.log(`[rotation] Poucas faixas após filtrar os últimos 5 sets (${filteredLibrary.length}). Usando pool original.`)
-      filteredLibrary = uniqueLibrary
-    } else {
-      console.log(`[rotation] Pool filtrado: ${uniqueLibrary.length} → ${filteredLibrary.length} faixas (removidas ${usedIds.size} usadas nos últimos sets)`)
+    // Se sobraram pouquíssimas faixas (ex: menos de 20), aí sim a gente avisa.
+    // Mas mesmo assim, tentamos rodar com o que sobrou pra não repetir.
+    if (filteredLibrary.length < setSize) {
+      console.warn(`[rotation] ALERTA: Sobraram menos faixas (${filteredLibrary.length}) do que o tamanho do set (${setSize}).`)
     }
-     // 🆕 Log para ver quantas músicas foram banidas da rotação
-    console.log(`[rotation] Removidas ${usedIds.size} faixas usadas nos últimos 20 sets.`);
-    // 🆕 TRAVA DE SEGURANÇA: Remove faixas duplicadas pelo TÍTULO para o TSP não repetir
+
+    // Trava de segurança de títulos...
     const uniqueTitles = new Set<string>();
     const cleanLibrary = filteredLibrary.filter(t => {
       const normTitle = t.title.trim().toLowerCase();
@@ -233,7 +233,7 @@ export async function POST(req: NextRequest) {
       uniqueTitles.add(normTitle);
       return true;
     });
-
+    
     // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
     const allTracksWithSegments = await prisma.track.findMany({
       where: { userId, segments: { not: Prisma.DbNull } },

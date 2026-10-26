@@ -192,3 +192,7 @@ Projeto pessoal. Não distribuir sem autorização.
 ## 📋 Nota técnica (pra quem for mexer no código)
 
 Esse README é **voltado pro usuário DJ**. Se você é **desenvolvedor** e quer entender a arquitetura técnica (Next.js, Prisma, FastAPI, `all-in-one-infer`, etc.), o `HANDOFF.md` no repositório tem toda a informação técnica.
+
+
+.venv\Scripts\python app.py
+.venv\Scripts\python scripts\analyze_new_tracks.py

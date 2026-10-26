@@ -40,6 +40,9 @@ export default function SetlistView({
   // 🆕 Função para trocar a faixa
   const [isReplacing, setIsReplacing] = useState<number | null>(null)
 
+  // 🆕 Estado para guardar as músicas que já foram testadas/rejeitadas
+  const [rejectedTracks, setRejectedTracks] = useState<Record<number, string[]>>({})
+
   const handleReplaceTrack = async (index: number) => {
     setIsReplacing(index)
     try {
@@ -55,24 +58,10 @@ export default function SetlistView({
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Erro ao trocar')
 
-      // Atualiza a tela com a nova faixa
-      const newSetlist = { ...setlist }
-      newSetlist.setlist[index] = {
-        ...newSetlist.setlist[index],
-        id: data.newTrack.id,
-        title: data.newTrack.title,
-        artist: data.newTrack.artist,
-        bpm: data.newTrack.bpm,
-        key: data.newTrack.key,
-        energy: data.newTrack.energy,
-      }
-      
-      // Atualiza o estado
-      window.location.reload() // Solução simples para atualizar a tela agora
+      window.location.reload()
       
     } catch (err: any) {
       alert(err.message || 'Erro ao trocar faixa')
-    } finally {
       setIsReplacing(null)
     }
   }
