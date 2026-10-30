@@ -27,7 +27,6 @@ export default function SaveToFolderButton({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  // Carrega pastas virtuais quando abre
   useEffect(() => {
     if (!open) return
 
@@ -57,7 +56,6 @@ export default function SaveToFolderButton({
     setError(null)
 
     try {
-      // 1. Adiciona as faixas na pasta virtual
       const addRes = await fetch(`/api/folders/${folderId}/tracks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -69,7 +67,6 @@ export default function SaveToFolderButton({
         throw new Error(err.error || 'Erro ao adicionar faixas')
       }
 
-      // 2. Vincula o setlist à pasta
       const patchRes = await fetch(`/api/setlists/${setlistId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -106,7 +103,6 @@ export default function SaveToFolderButton({
     setError(null)
 
     try {
-      // 1. Cria a pasta virtual
       const createRes = await fetch('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -129,28 +125,42 @@ export default function SaveToFolderButton({
     }
   }
 
+  // 🆕 Função para deletar pasta
+  const handleDeleteFolder = async (id: string, name: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Apagar a pasta "${name}"? Os sets dentro dela não serão apagados, apenas ficarão sem pasta.`)) return
+
+    try {
+      const res = await fetch(`/api/folders?id=${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Erro ao apagar')
+      setFolders(prev => prev.filter(f => f.id !== id))
+    } catch (err) {
+      alert('Erro ao apagar a pasta')
+    }
+  }
+
   return (
-  <div style={{ position: 'relative', width: '100%' }}>
+    <div style={{ position: 'relative', width: '100%' }}>
       <button
         onClick={() => setOpen(!open)}
         disabled={!setlistId}
         style={{
-  width: '100%',
-  padding: '12px 20px',
-  background: 'var(--surface2)',
-  border: '1px solid var(--border)',
-  borderRadius: 10,
-  color: 'var(--text)',
-  fontFamily: 'inherit',
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: setlistId ? 'pointer' : 'not-allowed',
-  opacity: setlistId ? 1 : 0.5,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 8,
-}}
+          width: '100%',
+          padding: '12px 20px',
+          background: 'var(--surface2)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          color: 'var(--text)',
+          fontFamily: 'inherit',
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: setlistId ? 'pointer' : 'not-allowed',
+          opacity: setlistId ? 1 : 0.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+        }}
       >
         📁 salvar em pasta
       </button>
@@ -192,24 +202,52 @@ export default function SaveToFolderButton({
           {!loading && folders.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
               {folders.map(f => (
-                <button
+                <div
                   key={f.id}
-                  onClick={() => handleSave(f.id, f.name)}
-                  disabled={saving}
                   style={{
-                    padding: '8px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                     background: 'var(--surface2)',
                     border: '1px solid var(--border)',
                     borderRadius: 6,
-                    color: 'var(--text)',
-                    fontSize: 13,
-                    fontFamily: 'inherit',
-                    cursor: saving ? 'not-allowed' : 'pointer',
-                    textAlign: 'left',
+                    padding: '0 4px',
                   }}
                 >
-                  📁 {f.name}
-                </button>
+                  <button
+                    onClick={() => handleSave(f.id, f.name)}
+                    disabled={saving}
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text)',
+                      fontSize: 13,
+                      fontFamily: 'inherit',
+                      cursor: saving ? 'not-allowed' : 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    📁 {f.name}
+                  </button>
+                  {/* 🆕 Botão de X para apagar */}
+                  <button
+                    onClick={(e) => handleDeleteFolder(f.id, f.name, e)}
+                    title="Apagar pasta"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--red)',
+                      cursor: 'pointer',
+                      fontSize: 16,
+                      padding: '4px 8px',
+                      lineHeight: 1,
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
           )}

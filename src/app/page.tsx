@@ -562,6 +562,22 @@ export default function Home() {
       alert('Erro ao abrir setlist')
     }
   }
+      // ... (outras funções lá em cima, como handleSmartGenerate, handleOpenSetlist, etc)
+
+  // 🆕 COLOQUE ELA AQUI (antes do generate)
+  const refreshSetlist = async () => {
+    if (!isRealFolder(selectedFolderId) && selectedFolderId !== 'all') return
+    
+    try {
+      const res = await fetch(`/api/setlist?folderId=${encodeURIComponent(selectedFolderId || 'all')}`)
+      if (res.ok) {
+        const data = await res.json()
+        setSetlist(data.setlist?.length > 0 ? data : null)
+      }
+    } catch (err) {
+      console.error('Erro ao atualizar setlist:', err)
+    }
+  }
 
   // 🎼 Gera setlist via IA
   const generate = async () => {
@@ -779,6 +795,7 @@ export default function Home() {
                     <SetlistView
                       setlist={setlist}
                       onRegenerate={generate}
+                      onUpdate={refreshSetlist}
                       analyses={analyses}
                       durations={durations}
                       allTracks={tracks}

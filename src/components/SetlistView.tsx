@@ -21,6 +21,7 @@ import SaveToFolderButton from './SaveToFolderButton'
 interface SetlistViewProps {
   setlist: GeneratedSetlist
   onRegenerate?: () => void
+  onUpdate?: () => void 
   analyses?: Record<string, AudioAnalysis>
   durations?: Record<string, number>
   allTracks?: Track[]
@@ -30,6 +31,7 @@ interface SetlistViewProps {
 export default function SetlistView({
   setlist,
   onRegenerate,
+  onUpdate,
   analyses,
   durations,
   allTracks = [],
@@ -43,25 +45,36 @@ export default function SetlistView({
   // 🆕 Estado para guardar as músicas que já foram testadas/rejeitadas
   const [rejectedTracks, setRejectedTracks] = useState<Record<number, string[]>>({})
 
-  const handleReplaceTrack = async (index: number) => {
+  const handleReplaceTrack = async (index: number, keyOffset: number = 0, targetEnergy: number | null = null) => {
     setIsReplacing(index)
+    const storageKey = `rejected_${setlist.id}`
+    const stored = localStorage.getItem(storageKey)
+    const allRejeitadas: string[] = stored ? JSON.parse(stored) : []
+
     try {
       const res = await fetch('/api/setlist/replace-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           setlistId: setlist.id, 
-          positionToReplace: index + 1 
+          positionToReplace: index + 1,
+          rejectedIds: allRejeitadas,
+          keyOffset,
+          targetEnergy // 🆕 Manda o valor exato (ou null)
         }),
       })
 
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Erro ao trocar')
 
-      window.location.reload()
-      
+      const newRejeitadas = [...allRejeitadas, data.newTrack.id]
+      localStorage.setItem(storageKey, JSON.stringify(newRejeitadas))
+
+      if (onUpdate) onUpdate()
+      else window.location.reload()
     } catch (err: any) {
       alert(err.message || 'Erro ao trocar faixa')
+    } finally {
       setIsReplacing(null)
     }
   }
@@ -414,11 +427,11 @@ const transitions = useMemo(() => {
             return (
               <div key={track.id || i}>
                 <TrackRow
-                  track={track}
-                  index={i}
-                  entryOffset={transition?.startOffsetA}
-                  onReplace={() => handleReplaceTrack(i)} // 🆕 Adicionado aqui
-                  isReplacing={isReplacing === i} // 🆕 Adicionado aqui
+                track={track}
+                index={i}
+                entryOffset={transition?.startOffsetA}
+                onReplace={(keyOffset, targetEnergy) => handleReplaceTrack(i, keyOffset, targetEnergy)}
+                isReplacing={isReplacing === i}
                 />
 
                 {!isLast && transition && (
@@ -477,7 +490,6 @@ const transitions = useMemo(() => {
 // ============================================================
 // TrackRow
 // ============================================================
-
 function TrackRow({
   track,
   index,
@@ -488,12 +500,14 @@ function TrackRow({
   track: any
   index: number
   entryOffset?: number
-  onReplace?: () => void
+  onReplace?: (keyOffset?: number, targetEnergy?: number | null) => void
   isReplacing?: boolean
 }) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
     : track.energy >= 6 ? 'var(--yellow)'
       : 'var(--green)'
+
+  const currentEnergy = Math.round(track.energy || 0)
 
   return (
     <div style={{
@@ -506,111 +520,135 @@ function TrackRow({
       borderRadius: 10,
     }}>
       <div style={{
-        width: 32,
-        height: 32,
-        borderRadius: 8,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        width: 32, height: 32, borderRadius: 8,
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: 'var(--font-mono, monospace)',
-        fontSize: 12,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        flexShrink: 0,
+        fontSize: 12, fontWeight: 700, color: 'var(--muted)', flexShrink: 0,
       }}>
         {index + 1}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{
-          fontSize: 14,
-          fontWeight: 600,
-          color: 'var(--text)',
-          marginBottom: 2,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {track.title}
         </p>
-        <p style={{
-          fontSize: 12,
-          color: 'var(--muted)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>
+        <p style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {track.artist}
         </p>
       </div>
 
       {entryOffset !== undefined && entryOffset > 0 && (
         <span style={{
-          fontSize: 11,
-          color: 'var(--accent)',
-          fontFamily: 'var(--font-mono, monospace)',
-          padding: '2px 8px',
-          background: 'rgba(124, 92, 252, 0.15)',
-          borderRadius: 4,
-          flexShrink: 0,
+          fontSize: 11, color: 'var(--accent)', fontFamily: 'var(--font-mono, monospace)',
+          padding: '2px 8px', background: 'rgba(124, 92, 252, 0.15)', borderRadius: 4, flexShrink: 0,
         }}>
           entra aos {formatSeconds(entryOffset)}
         </span>
       )}
 
+      {/* 🆕 ÁREA DOS CONTROLES (Tudo alinhado) */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+        
         {track.bpm > 0 && (
-          <span style={{
-            fontSize: 11,
-            color: 'var(--muted)',
-            fontFamily: 'var(--font-mono, monospace)',
-          }}>
+          <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
             {track.bpm} BPM
           </span>
         )}
+
+        {/* 🆕 CONTROLE DE TOM (Fica colado no badge do tom) */}
         {track.key && track.key !== 'desconhecido' && track.key !== '' && (
-          <span style={{
-            fontSize: 11,
-            color: 'var(--accent)',
-            fontFamily: 'var(--font-mono, monospace)',
-            padding: '2px 8px',
-            background: 'rgba(124, 92, 252, 0.15)',
-            borderRadius: 4,
-          }}>
-            {track.key}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {onReplace && (
+              <button
+                onClick={() => onReplace(-1, null)}
+                disabled={isReplacing}
+                title="Buscar tom -1"
+                style={{
+                  background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
+                  color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                -
+              </button>
+            )}
+            
+            <span style={{
+              fontSize: 11, color: 'var(--accent)', fontFamily: 'var(--font-mono, monospace)',
+              padding: '2px 8px', background: 'rgba(124, 92, 252, 0.15)', borderRadius: 4,
+            }}>
+              {track.key}
+            </span>
+
+            {onReplace && (
+              <button
+                onClick={() => onReplace(1, null)}
+                disabled={isReplacing}
+                title="Buscar tom +1"
+                style={{
+                  background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
+                  color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                +
+              </button>
+            )}
+          </div>
         )}
-        <div style={{ display: 'flex', gap: 2 }} title={`Energia ${track.energy}/10`}>
-          {Array.from({ length: 10 }).map((_, i) => (
-            <div
-              key={i}
+
+        {/* 🆕 CONTROLE DE ENERGIA (Fica colado nas barrinhas) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {onReplace && (
+            <button
+              onClick={() => onReplace(0, Math.max(1, currentEnergy - 1))}
+              disabled={isReplacing}
+              title="Baixar energia"
               style={{
-                width: 3,
-                height: 12,
-                borderRadius: 1,
-                background: i < track.energy ? energyColor : 'var(--border)',
+                background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
+                color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
               }}
-            />
-          ))}
+            >
+              -
+            </button>
+          )}
+
+          <div style={{ display: 'flex', gap: 2 }} title={`Energia ${track.energy}/10`}>
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div
+                key={i}
+                style={{
+                  width: 3, height: 12, borderRadius: 1,
+                  background: i < track.energy ? energyColor : 'var(--border)',
+                }}
+              />
+            ))}
+          </div>
+
+          {onReplace && (
+            <button
+              onClick={() => onReplace(0, Math.min(10, currentEnergy + 1))}
+              disabled={isReplacing}
+              title="Aumentar energia"
+              style={{
+                background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
+                color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              +
+            </button>
+          )}
         </div>
 
+        {/* BOTÃO DE TROCAR NORMAL */}
         {onReplace && (
           <button
-            onClick={onReplace}
+            onClick={() => onReplace(0, null)}
             disabled={isReplacing}
-            title="Substituir esta faixa"
+            title="Trocar música (mantendo padrão)"
             style={{
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              color: isReplacing ? 'var(--muted)' : 'var(--text)',
-              padding: '4px 8px',
-              fontSize: 12,
-              cursor: isReplacing ? 'not-allowed' : 'pointer',
-              marginLeft: 8,
-              opacity: isReplacing ? 0.5 : 1,
+              background: 'transparent', border: '1px solid var(--border)', borderRadius: 6,
+              color: isReplacing ? 'var(--muted)' : 'var(--text)', padding: '4px 8px', fontSize: 12,
+              cursor: isReplacing ? 'not-allowed' : 'pointer', opacity: isReplacing ? 0.5 : 1,
             }}
           >
             {isReplacing ? '⟳' : '🔄'}
@@ -620,7 +658,6 @@ function TrackRow({
     </div>
   )
 }
-
 // ============================================================
 // SEGMENT STYLES
 // ============================================================

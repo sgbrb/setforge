@@ -85,7 +85,6 @@ model Setlist {
   totalDuration    String?
   userId           String
   folderId         String?
-  rejectedTrackIds String?        // 🆕 Adicionado aqui (dentro do modelo)
   user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   folder           Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
   tracks           SetlistTrack[]

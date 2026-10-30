@@ -93,7 +93,18 @@ export async function autoFixSetlist(
         }
       }
 
+      // 🆕 VERIFICAÇÃO DE ENERGIA: Só troca se a energia for compatível
       if (bestCandidate && bestCandidate.score > issue.score + 5) {
+        const currentEnergy = (fromTrack as any).energy || 0
+        const newEnergy = (bestCandidate.track.segments as any)?.energy || 0
+        const energyDiff = Math.abs(currentEnergy - newEnergy)
+
+        // Se a energia for muito diferente, NÃO troca (para preservar a curva do TSP)
+        if (energyDiff > 2.0) {
+          console.log(`[auto-fix] Ignorando troca de "${fromTrack.title}" (energia ${currentEnergy}) por "${bestCandidate.track.title}" (energia ${newEnergy}) — energia muito diferente.`)
+          continue 
+        }
+
         const newTrack: Track = {
           id: bestCandidate.track.id,
           folderId: null,

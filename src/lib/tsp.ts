@@ -30,6 +30,7 @@ export interface TspOptions {
   twoOptPasses?: number
   usagePenalty?: Record<string, number>
   minTransitionScore?: number // 🆕 Padrão Ouro
+  energyCurve?: { target: number }[] 
 }
 
 export interface TspResult {
@@ -163,6 +164,7 @@ function nearestNeighbor(
   startIdx: number,
   count: number,
   usagePenalty?: Record<string, number>,
+  energyCurve?: { target: number }[],
   minTransitionScore?: number
 ): Track[] {
   if (pool.length === 0) return []
@@ -177,15 +179,12 @@ function nearestNeighbor(
     let bestScore = -1
 
     for (let i = 0; i < remaining.length; i++) {
-      const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty)
+      const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty, energyCurve)
       
-      // 🆕 PADRÃO OURO: ignora transições abaixo do limite
+      // Padrão Ouro
       if (minTransitionScore !== undefined && score < minTransitionScore) {
         continue
       }
-
-          // 🆕 Penaliza transições abaixo de 80: se o score for ruim, ele nem considera
-      if (score < 80) continue; 
       
       if (score > bestScore) {
         bestScore = score
@@ -193,10 +192,10 @@ function nearestNeighbor(
       }
     }
 
-    // Se nenhuma candidata passou no padrão ouro, pega a melhor possível (fallback)
+    // Fallback se nenhuma passou no padrão
     if (bestScore === -1) {
       for (let i = 0; i < remaining.length; i++) {
-        const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty)
+        const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty, energyCurve)
         if (score > bestScore) {
           bestScore = score
           bestIdx = i
@@ -215,12 +214,16 @@ function nearestNeighbor(
 // FASE 3 — REFINAMENTO: 2-OPT
 // ============================================================
 
-function scoreOrder(tracks: Track[], usagePenalty?: Record<string, number>): number {
+function scoreOrder(
+  tracks: Track[],
+  usagePenalty?: Record<string, number>,
+  energyCurve?: { target: number }[]
+): number {
   if (tracks.length <= 1) return 0
   let total = 0
   const N = tracks.length
   for (let i = 0; i < tracks.length - 1; i++) {
-    total += getTransitionScore(tracks[i], tracks[i + 1], i, N, usagePenalty)
+    total += getTransitionScore(tracks[i], tracks[i + 1], i, N, usagePenalty, energyCurve)
   }
   return total
 }
@@ -229,13 +232,14 @@ function twoOpt(
   tracks: Track[],
   passes: number,
   usagePenalty?: Record<string, number>,
+  energyCurve?: { target: number }[],
   minTransitionScore?: number
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best, usagePenalty)
+  let bestScore = scoreOrder(best, usagePenalty, energyCurve)
 
   for (let pass = 0; pass < passes; pass++) {
     let improved = false
@@ -247,12 +251,11 @@ function twoOpt(
           ...best.slice(i + 1, j + 1).reverse(),
           ...best.slice(j + 1),
         ]
-        
-        // 🆕 Verifica se o candidato viola o padrão ouro
+
         let violates = false
         if (minTransitionScore !== undefined) {
           for (let k = 0; k < candidate.length - 1; k++) {
-            const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty)
+            const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty, energyCurve)
             if (s < minTransitionScore) {
               violates = true
               break
@@ -262,7 +265,7 @@ function twoOpt(
 
         if (violates) continue
 
-        const candidateScore = scoreOrder(candidate, usagePenalty)
+        const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve)
 
         if (candidateScore > bestScore) {
           best = candidate
@@ -286,13 +289,14 @@ function orOpt(
   tracks: Track[],
   maxBlockSize: number = 3,
   usagePenalty?: Record<string, number>,
+  energyCurve?: { target: number }[],
   minTransitionScore?: number
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best, usagePenalty)
+  let bestScore = scoreOrder(best, usagePenalty, energyCurve)
   let improved = true
 
   while (improved) {
@@ -305,12 +309,11 @@ function orOpt(
 
         for (let j = 0; j < rest.length; j++) {
           const candidate = [...rest.slice(0, j), ...block, ...rest.slice(j)]
-          
-          // 🆕 Verifica se o candidato viola o padrão ouro
+
           let violates = false
           if (minTransitionScore !== undefined) {
             for (let k = 0; k < candidate.length - 1; k++) {
-              const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty)
+              const s = getTransitionScore(candidate[k], candidate[k + 1], k, candidate.length, usagePenalty, energyCurve)
               if (s < minTransitionScore) {
                 violates = true
                 break
@@ -320,7 +323,7 @@ function orOpt(
 
           if (violates) continue
 
-          const candidateScore = scoreOrder(candidate, usagePenalty)
+          const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve)
 
           if (candidateScore > bestScore) {
             best = candidate
@@ -334,7 +337,6 @@ function orOpt(
 
   return best
 }
-
 // ============================================================
 // ORQUESTRADOR — MULTI-START + 2-OPT + OR-OPT
 // ============================================================
@@ -344,8 +346,8 @@ export function generateSmartSet(
   options: TspOptions
 ): TspResult {
   const startTime = Date.now()
-
   const count = options.count || 30
+  const energyCurve = options.energyCurve
   const bpmTarget = options.bpmTarget ?? null
   const bpmRange = options.bpmRange ?? 10
   const minCamelotScore = options.minCamelotScore ?? 85
@@ -353,7 +355,7 @@ export function generateSmartSet(
   const multiStart = options.multiStart ?? 100
   const twoOptPasses = options.twoOptPasses ?? 2
   const usagePenalty = options.usagePenalty
-  const minTransitionScore = options.minTransitionScore // 🆕
+  const minTransitionScore = options.minTransitionScore
 
   const filtered = filterCandidates(library, bpmTarget, bpmRange, minCamelotScore)
   const diversified = diversifyPool(filtered, count)
@@ -381,8 +383,9 @@ export function generateSmartSet(
 
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
-    const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty, minTransitionScore)
-    const score = scoreOrder(order, usagePenalty)
+    // 🆕 Passa energyCurve e minTransitionScore na ordem certa
+    const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty, energyCurve, minTransitionScore)
+    const score = scoreOrder(order, usagePenalty, energyCurve)
 
     if (score > bestScore) {
       bestScore = score
@@ -390,11 +393,13 @@ export function generateSmartSet(
     }
   }
 
-  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, minTransitionScore)
-  bestScore = scoreOrder(bestOrder, usagePenalty)
+  // 🆕 Passa energyCurve e minTransitionScore
+  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, energyCurve, minTransitionScore)
+  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
 
-  bestOrder = orOpt(bestOrder, 3, usagePenalty, minTransitionScore)
-  bestScore = scoreOrder(bestOrder, usagePenalty)
+  // 🆕 Passa energyCurve e minTransitionScore
+  bestOrder = orOpt(bestOrder, 3, usagePenalty, energyCurve, minTransitionScore)
+  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
 
   // MÉTRICAS
   let worst = 100
@@ -402,7 +407,8 @@ export function generateSmartSet(
   let worstToTitle = ''
 
   for (let i = 0; i < bestOrder.length - 1; i++) {
-    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], i, bestOrder.length, usagePenalty)
+    // 🆕 Passa energyCurve para o cálculo do worstScore também
+    const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], i, bestOrder.length, usagePenalty, energyCurve)
     if (s < worst) {
       worst = s
       worstFromTitle = bestOrder[i].title
@@ -415,7 +421,6 @@ export function generateSmartSet(
       ? Math.round(bestScore / (bestOrder.length - 1))
       : 0
 
-  // 🆕 PADRÃO OURO: verifica se o caminho final passou no limite
   const passedQualityCheck = minTransitionScore === undefined || worst >= minTransitionScore
 
   return {

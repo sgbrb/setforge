@@ -23,6 +23,11 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  
+  // 🆕 Estados para as novas funções
+  const [selected, setSelected] = useState<string[]>([])
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
 
   const loadInitial = useCallback(async () => {
     setLoading(true)
@@ -71,11 +76,50 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
       const res = await fetch(`/api/setlists/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setSetlists(prev => prev.filter(s => s.id !== id))
+      setSelected(prev => prev.filter(sid => sid !== id))
     } catch (err) {
       alert('Erro ao deletar setlist')
     } finally {
       setDeletingId(null)
     }
+  }
+
+  // 🆕 Deletar selecionados
+  const handleDeleteSelected = async () => {
+    if (selected.length === 0) return
+    if (!confirm(`Apagar ${selected.length} set(s)? Não tem volta.`)) return
+    
+    try {
+      await Promise.all(selected.map(id => fetch(`/api/setlists/${id}`, { method: 'DELETE' })))
+      setSetlists(prev => prev.filter(s => !selected.includes(s.id)))
+      setSelected([])
+    } catch (err) {
+      alert('Erro ao apagar setlists')
+    }
+  }
+
+  // 🆕 Renomear
+  const handleRename = async (id: string) => {
+    const trimmed = editingName.trim()
+    if (!trimmed) { setEditingId(null); return }
+    
+    try {
+      const res = await fetch(`/api/setlists/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      })
+      if (!res.ok) throw new Error('Erro')
+      
+      setSetlists(prev => prev.map(s => s.id === id ? { ...s, name: trimmed } : s))
+      setEditingId(null)
+    } catch (err) {
+      alert('Erro ao renomear setlist')
+    }
+  }
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id])
   }
 
   if (loading) {
@@ -107,12 +151,28 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      
+      {/* 🆕 Botão de apagar selecionados */}
+      {selected.length > 0 && (
+        <button
+          onClick={handleDeleteSelected}
+          style={{
+            alignSelf: 'flex-start', padding: '8px 16px',
+            background: 'var(--red)', color: '#fff', border: 'none',
+            borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+            marginBottom: 8
+          }}
+        >
+          🗑 apagar {selected.length} selecionado(s)
+        </button>
+      )}
+
       {setlists.map(s => (
         <div
           key={s.id}
           style={{
             background: 'var(--surface2)',
-            border: '1px solid var(--border)',
+            border: `1px solid ${selected.includes(s.id) ? 'var(--accent)' : 'var(--border)'}`,
             borderRadius: 10,
             padding: '14px 16px',
             display: 'flex',
@@ -120,10 +180,40 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
             gap: 12,
           }}
         >
+          {/* 🆕 Checkbox */}
+          <input
+            type="checkbox"
+            checked={selected.includes(s.id)}
+            onChange={() => toggleSelect(s.id)}
+            style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+          />
+
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {s.name}
-            </p>
+            {/* 🆕 Input para renomear */}
+            {editingId === s.id ? (
+              <input
+                type="text"
+                value={editingName}
+                onChange={e => setEditingName(e.target.value)}
+                onBlur={() => handleRename(s.id)}
+                onKeyDown={e => e.key === 'Enter' && handleRename(s.id)}
+                autoFocus
+                style={{
+                  width: '100%', background: 'var(--surface)',
+                  border: '1px solid var(--accent)', borderRadius: 6,
+                  color: 'var(--text)', padding: '4px 8px', fontSize: 14,
+                  fontWeight: 600, marginBottom: 4
+                }}
+              />
+            ) : (
+              <p 
+                style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                onDoubleClick={() => { setEditingId(s.id); setEditingName(s.name) }}
+                title="Clique duplo para renomear"
+              >
+                {s.name}
+              </p>
+            )}
             <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
               {new Date(s.createdAt).toLocaleString('pt-BR')} · {s.trackCount} faixa{s.trackCount !== 1 ? 's' : ''}
             </p>
@@ -145,6 +235,7 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
               fontWeight: 600,
               fontFamily: 'var(--font-mono, monospace)',
               cursor: 'pointer',
+              flexShrink: 0
             }}
           >
             abrir
@@ -160,6 +251,7 @@ export default function SetlistHistory({ onOpen }: SetlistHistoryProps) {
               color: deletingId === s.id ? 'var(--muted)' : 'var(--red)',
               fontSize: 12,
               cursor: deletingId === s.id ? 'not-allowed' : 'pointer',
+              flexShrink: 0
             }}
             title="apagar setlist"
           >

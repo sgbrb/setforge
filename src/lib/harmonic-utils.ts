@@ -105,27 +105,65 @@ export function getTransitionScore(
   trackB: Track,
   position: number = 0,
   total: number = 30,
-  usagePenalty?: Record<string, number>
+  usagePenalty?: Record<string, number>,
+  energyCurve?: { target: number }[] 
 ): number {
   const camelot = getCamelotCompatibility(trackA.key, trackB.key)
   const bpm = getBpmCompatibility(trackA.bpm, trackB.bpm)
 
-  const targetEnergy = getTargetEnergy(position + 1, total)
-  const energyB = (trackB as any).energy
-  const energyCompat = getEnergyCompatibility(energyB, targetEnergy)
+   // 🆕 CÁLCULO DA CURVA EM PERCENTUAL (funciona para qualquer tamanho de set)
+  const pct = (position + 1) / total
 
-  // 🆕 Score final: 55% Camelot + 30% BPM + 15% Energia
-  // Diminuímos o peso da energia para evitar que a curva estrague transições harmônicas.
-  const baseScore = camelot * 0.60 + bpm * 0.30 + energyCompat * 0.10
+  let targetEnergy = 6
+  let tolerancia = 1
+
+  // 🆕 Usa a curva adaptativa se ela foi passada
+  if (energyCurve && energyCurve.length > 0) {
+    let blockIdx = 0
+    if (pct > 0.17 && pct <= 0.47) blockIdx = 1
+    else if (pct > 0.47 && pct <= 0.80) blockIdx = 2
+    else if (pct > 0.80) blockIdx = 3
+
+    targetEnergy = energyCurve[blockIdx]?.target || 6
+    tolerancia = targetEnergy >= 9 ? 0.5 : 1
+  } else {
+    // Fallback: curva fixa antiga
+    if (pct <= 0.17) {
+      targetEnergy = 4
+    } else if (pct <= 0.47) {
+      targetEnergy = 6
+    } else if (pct <= 0.80) {
+      targetEnergy = 9
+      tolerancia = 0.5
+    } else {
+      targetEnergy = 6
+    }
+  }
+  const energyB = (trackB as any).energy || 0
+  const energyDiff = Math.abs(energyB - targetEnergy)
+
+  // 🆕 A ENERGIA É O FACTOR PRINCIPAL
+  // Se a música estiver fora do alvo, o score dela cai drasticamente
+  let energyScore = 100
+  if (energyDiff > tolerancia) {
+    // Cada unidade fora da tolerância tira 50 pontos do score final
+    energyScore -= (energyDiff - tolerancia) * 50
+  }
+
+  // O Tom e o BPM agora são apenas "ajudantes" para desempatar músicas com a energia certa
+  // 70% Energia + 20% Tom + 10% BPM
+  const baseScore = energyScore * 0.70 + camelot * 0.20 + bpm * 0.10
+
+  let finalScore = baseScore
 
   if (usagePenalty) {
     const pA = usagePenalty[trackA.id] ?? 0
     const pB = usagePenalty[trackB.id] ?? 0
     const avg = (pA + pB) / 2
-    return Math.round(baseScore * (1 - avg))
+    finalScore = finalScore * (1 - avg)
   }
 
-  return Math.round(baseScore)
+  return Math.round(Math.max(0, finalScore))
 }
 
 /**

@@ -65,6 +65,41 @@ function signaturesMatch(
 
   return false
 }
+// 🆕 Analisa a biblioteca e devolve uma curva de energia realista
+function getAdaptiveEnergyCurve(tracks: FrontendTrack[]): { target: number }[] {
+  if (tracks.length === 0) return []
+  
+  // Conta quantas músicas existem para cada energia (arredondada)
+  const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 }
+  for (const t of tracks) {
+    const energy = Math.round((t as any).energy || 0)
+    if (energy >= 1 && energy <= 10) counts[energy]++
+  }
+
+  // Acha a energia "mediana" (a que tem mais músicas)
+  let mostCommonEnergy = 6
+  let maxCount = 0
+  for (let i = 1; i <= 10; i++) {
+    if (counts[i] > maxCount) {
+      maxCount = counts[i]
+      mostCommonEnergy = i
+    }
+  }
+
+  // Define a curva baseada na energia mais comum da biblioteca
+  // Se a biblioteca é "quente" (energia 7+), a curva sobe.
+  // Se é "fria" (energia 3-5), a curva fica mais baixa.
+  const baseEnergy = mostCommonEnergy
+  const curve = [
+    { target: Math.max(1, baseEnergy - 2) }, // Bloco 1: mais calmo
+    { target: Math.max(2, baseEnergy - 1) }, // Bloco 2: subindo
+    { target: Math.min(10, baseEnergy + 2) }, // Bloco 3: pico (base + 2)
+    { target: Math.max(2, baseEnergy - 1) }, // Bloco 4: descendo
+  ]
+
+  console.log(`[energia] Energia mais comum: ${baseEnergy}. Curva adaptativa: ${curve.map(c => c.target).join(' → ')}`)
+  return curve
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -233,7 +268,9 @@ export async function POST(req: NextRequest) {
       uniqueTitles.add(normTitle);
       return true;
     });
-    
+        // 🆕 Calcula a curva adaptativa baseada na biblioteca atual
+    const adaptiveCurve = getAdaptiveEnergyCurve(filteredLibrary)
+
     // 6. 🆕 PREPARA DADOS PRO AUTO-FIX (UMA VEZ, fora do loop)
     const allTracksWithSegments = await prisma.track.findMany({
       where: { userId, segments: { not: Prisma.DbNull } },
@@ -267,10 +304,11 @@ export async function POST(req: NextRequest) {
         bpmRange,
         minCamelotScore,
         seed,
-        multiStart: 500, // 🆕 Aumentado de 100 para 200
+        multiStart: 500, 
         twoOptPasses: 2,
         usagePenalty,
-        minTransitionScore: 80, // Força o padrão ouro
+        minTransitionScore: 80, 
+        energyCurve: adaptiveCurve,
       });
 
       // Se não achou faixas, ignora essa tentativa
