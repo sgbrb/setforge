@@ -53,6 +53,8 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<'library' | 'history'>('library')
 
+  const [lastEnergyTrend, setLastEnergyTrend] = useState<'steady' | 'build' | 'wave' | 'custom'>('steady')
+
   // 🔒 Redireciona se não estiver logado
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -471,6 +473,9 @@ export default function Home() {
   const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
     setSmartLoading(true)
     setSetlist(null)
+     if (filters.energyTrend) {
+      setLastEnergyTrend(filters.energyTrend)
+    }
     try {
       const res = await fetch('/api/generate-smart-setlist', {
         method: 'POST',
@@ -482,6 +487,8 @@ export default function Home() {
           setSize: filters.setSize,
           onlyAnalyzed: true,
           folderId: 'all',
+          energyTrend: filters.energyTrend, // 🆕
+          energyBlocks: filters.energyBlocks,
         }),
       })
 
@@ -795,6 +802,7 @@ export default function Home() {
                     <SetlistView
                       setlist={setlist}
                       onRegenerate={generate}
+                      energyTrend={lastEnergyTrend}
                       onUpdate={refreshSetlist}
                       analyses={analyses}
                       durations={durations}

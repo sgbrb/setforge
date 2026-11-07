@@ -46,17 +46,17 @@ def detect_energy(audio_path: str, sr=22050) -> float:
 
         # print(f"[DEBUG] rms={rms:.4f} centroid={centroid:.1f} flux={flux:.2f} zcr={zcr:.4f}")
 
-        rms_norm = min(rms / 0.25, 1.0)          # volta pra 0.25 (não importa muito)
-        centroid_norm = min(centroid / 4000.0, 1.0)  # calibra pro range real (750-3790)
-        flux_norm = min(flux / 120.0, 1.0)       # calibra pro range real (55-88)
-        zcr_norm = min(zcr / 0.20, 1.0)          # calibra pro range real (0.03-0.19)
+# 🆕 FÓRMULA CALIBRADA COM O AURAAMP
+        rms_norm = min(rms / 0.30, 1.0)
+        centroid_norm = min(centroid / 4500.0, 1.0)
+        flux_norm = min(flux / 120, 1.0)
+        zcr_norm = min(zcr / 0.20, 1.0)
 
-        # Fórmula (pesos empíricos)
         energy_0_1 = (
-        0.05 * rms_norm +
+        0.35 * rms_norm +
         0.35 * centroid_norm +
         0.10 * flux_norm +
-        0.50 * zcr_norm
+        0.20 * zcr_norm
         )
 
         energy = round(energy_0_1 * 10, 2)

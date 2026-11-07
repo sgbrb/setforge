@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo } from 'react'
-import { getTargetEnergy } from '@/lib/harmonic-utils'
 
 interface TrackForChart {
   energy?: number
@@ -11,11 +10,13 @@ interface TrackForChart {
 interface EnergyCurveChartProps {
   tracks: TrackForChart[]
   totalPositions: number
+  energyTrend?: 'steady' | 'build' | 'wave' | 'custom' // 🆕
 }
 
 export default function EnergyCurveChart({
   tracks,
   totalPositions,
+  energyTrend,
 }: EnergyCurveChartProps) {
   const width = 800
   const height = 200
@@ -29,14 +30,43 @@ export default function EnergyCurveChart({
     })
   }, [tracks])
 
-  // Calcula a energia alvo pra cada posição
+  // 🆕 Calcula a energia alvo pra cada posição baseada na tendência
   const targetEnergies = useMemo(() => {
     const arr: number[] = []
-    for (let i = 1; i <= totalPositions; i++) {
-      arr.push(getTargetEnergy(i, totalPositions))
+    const n = totalPositions
+
+    if (energyTrend === 'steady') {
+      // Manter: linha reta em 9 (a energia mais comum da sua biblioteca)
+      for (let i = 1; i <= n; i++) arr.push(9)
+    } else if (energyTrend === 'build') {
+      // Subir: começa em 8, sobe linearmente até 10, depois desce um pouco para 9
+      for (let i = 1; i <= n; i++) {
+        const pct = i / n
+        if (pct <= 0.33) arr.push(8 + (9 - 8) * (pct / 0.33))
+        else if (pct <= 0.66) arr.push(9 + (10 - 9) * ((pct - 0.33) / 0.33))
+        else arr.push(10 - (10 - 9) * ((pct - 0.66) / 0.34))
+      }
+    } else if (energyTrend === 'wave') {
+      // Onda: sobe e desce duas vezes (9 → 10 → 8 → 10)
+      for (let i = 1; i <= n; i++) {
+        const pct = i / n
+        if (pct <= 0.25) arr.push(9 + (10 - 9) * (pct / 0.25))
+        else if (pct <= 0.5) arr.push(10 - (10 - 8) * ((pct - 0.25) / 0.25))
+        else if (pct <= 0.75) arr.push(8 + (10 - 8) * ((pct - 0.5) / 0.25))
+        else arr.push(10 - (10 - 9) * ((pct - 0.75) / 0.25))
+      }
+    } else {
+      // Fallback: curva adaptativa antiga (se não tiver tendência)
+      for (let i = 1; i <= n; i++) {
+        const pct = i / n
+        if (pct < 0.17) arr.push(4)
+        else if (pct < 0.50) arr.push(6)
+        else if (pct < 0.83) arr.push(9)
+        else arr.push(6)
+      }
     }
     return arr
-  }, [totalPositions])
+  }, [totalPositions, energyTrend])
 
   // Se não há dados, mostra "aguardando"
   if (realEnergies.every(e => e === 0)) {
@@ -64,7 +94,6 @@ export default function EnergyCurveChart({
   const xFor = (i: number) => padding + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW)
   const yFor = (energy: number) => height - padding - (energy / 10) * innerH
 
-  // Monta o `points` do SVG pra cada linha
   const realPoints = realEnergies
     .map((e, i) => `${xFor(i)},${yFor(e)}`)
     .join(' ')
@@ -73,7 +102,6 @@ export default function EnergyCurveChart({
     .map((e, i) => `${xFor(i)},${yFor(e)}`)
     .join(' ')
 
-  // Pontos coloridos por energia
   const getPointColor = (energy: number) => {
     if (energy >= 8) return 'var(--red)'
     if (energy >= 6) return 'var(--yellow)'
@@ -81,14 +109,9 @@ export default function EnergyCurveChart({
     return 'var(--green)'
   }
 
-  // Marcas no eixo X (a cada 5 posições)
   const xLabels: number[] = []
-  for (let i = 0; i < n; i += 5) {
-    xLabels.push(i)
-  }
-  if (xLabels[xLabels.length - 1] !== n - 1) {
-    xLabels.push(n - 1)
-  }
+  for (let i = 0; i < n; i += 5) xLabels.push(i)
+  if (xLabels[xLabels.length - 1] !== n - 1) xLabels.push(n - 1)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -124,7 +147,6 @@ export default function EnergyCurveChart({
           border: '1px solid var(--border)',
         }}
       >
-        {/* Grid de energia (0, 2, 4, 6, 8, 10) */}
         {[0, 2, 4, 6, 8, 10].map(e => (
           <g key={`grid-${e}`}>
             <line
@@ -149,7 +171,6 @@ export default function EnergyCurveChart({
           </g>
         ))}
 
-        {/* Linha alvo (tracejada) */}
         <polyline
           points={targetPoints}
           fill="none"
@@ -159,7 +180,6 @@ export default function EnergyCurveChart({
           strokeDasharray="4 4"
         />
 
-        {/* Linha real (sólida) */}
         <polyline
           points={realPoints}
           fill="none"
@@ -169,7 +189,6 @@ export default function EnergyCurveChart({
           strokeLinecap="round"
         />
 
-        {/* Pontos coloridos */}
         {realEnergies.map((e, i) => (
           <circle
             key={`pt-${i}`}
@@ -184,7 +203,6 @@ export default function EnergyCurveChart({
           </circle>
         ))}
 
-        {/* Marcas no eixo X */}
         {xLabels.map(i => (
           <text
             key={`xl-${i}`}
@@ -200,7 +218,6 @@ export default function EnergyCurveChart({
         ))}
       </svg>
 
-      {/* Resumo */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',

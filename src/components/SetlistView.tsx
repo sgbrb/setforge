@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { jsPDF } from 'jspdf'
+import { getTransitionScore } from '@/lib/harmonic-utils'
 import { GeneratedSetlist, Track, Folder } from '@/lib/types'
 import {
   MixTimeline,
@@ -13,6 +14,7 @@ import {
   discoverMixPoints,
 } from '@/lib/mix-timeline'
 import { analyzeTransitions, type TransitionIssue } from '@/lib/setlist-analysis'
+import { getTargetEnergy } from '@/lib/harmonic-utils' // 🆕 Para o gráfico
 import CompatibilityMatrix from './CompatibilityMatrix'
 import EnergyCurveChart from './EnergyCurveChart'
 import HarmonyCurveChart from './HarmonyCurveChart'
@@ -26,6 +28,7 @@ interface SetlistViewProps {
   durations?: Record<string, number>
   allTracks?: Track[]
   allFolders?: Folder[]
+  energyTrend?: 'steady' | 'build' | 'wave' | 'custom'
 }
 
 export default function SetlistView({
@@ -36,20 +39,61 @@ export default function SetlistView({
   durations,
   allTracks = [],
   allFolders = [],
+  energyTrend, 
 }: SetlistViewProps) {
  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
   const [showMatrix, setShowMatrix] = useState(false)
+  // 🆕 Cache de transições (para calcular o score no frontend)
+  const [transitionsOtimas, setTransitionsOtimas] = useState<Record<string, any[]>>({})
+  const [transitionsBoas, setTransitionsBoas] = useState<Record<string, any[]>>({})
+
+  useEffect(() => {
+    fetch('/transicoes_otimas.json').then(r => r.json()).then(setTransitionsOtimas).catch(console.error)
+    fetch('/transicoes_boas.json').then(r => r.json()).then(setTransitionsBoas).catch(console.error)
+  }, [])
+
+    const getScore = (fromTrack: any, toTrack: any): number => {
+    if (!fromTrack?.id || !toTrack?.id) return 0
+
+    // 1) Tenta no cache das ótimas
+    let match = transitionsOtimas[fromTrack.id]?.find((o: any) => o.toTrackId === toTrack.id)
+    
+    // 2) Se não achou, tenta no cache das boas
+    if (!match) {
+      match = transitionsBoas[fromTrack.id]?.find((o: any) => o.toTrackId === toTrack.id)
+    }
+    
+    // 3) Se achou no arquivo, retorna a nota
+    if (match) return Math.round(match.score)
+
+    // 4) 🆕 Se NÃO achou, faz o cálculo antigo (fallback)
+    // Passamos 0 e 20 para position e total (só pra simular o cálculo)
+    return getTransitionScore(fromTrack, toTrack, 0, 20) 
+  }
+   // 🆕 ADICIONE AQUI (logo depois do showMatrix)
+  const [lockedKeys, setLockedKeys] = useState<Set<number>>(new Set())
+  
+  const toggleKeyLock = (index: number) => {
+    setLockedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
   // 🆕 Função para trocar a faixa
   const [isReplacing, setIsReplacing] = useState<number | null>(null)
 
   // 🆕 Estado para guardar as músicas que já foram testadas/rejeitadas
   const [rejectedTracks, setRejectedTracks] = useState<Record<number, string[]>>({})
 
-  const handleReplaceTrack = async (index: number, keyOffset: number = 0, targetEnergy: number | null = null) => {
+    const handleReplaceTrack = async (index: number, keyOffset: number = 0, targetEnergy: number | null = null) => {
     setIsReplacing(index)
     const storageKey = `rejected_${setlist.id}`
     const stored = localStorage.getItem(storageKey)
     const allRejeitadas: string[] = stored ? JSON.parse(stored) : []
+    const isLocked = lockedKeys.has(index) // 🆕 Verifica se o cadeado está ativo
 
     try {
       const res = await fetch('/api/setlist/replace-track', {
@@ -59,8 +103,9 @@ export default function SetlistView({
           setlistId: setlist.id, 
           positionToReplace: index + 1,
           rejectedIds: allRejeitadas,
-          keyOffset,
-          targetEnergy // 🆕 Manda o valor exato (ou null)
+          keyOffset: isLocked ? 0 : keyOffset, // 🆕 Se travado, ignora o offset
+          targetEnergy,
+          forcedKey: isLocked ? setlist.setlist[index].key : undefined, // 🆕 Força o Tom atual
         }),
       })
 
@@ -78,6 +123,7 @@ export default function SetlistView({
       setIsReplacing(null)
     }
   }
+
    // 🆕 2. Função para EXPANDIR o set inteiro (nova, cole logo abaixo da de cima)
   const handleExpandSet = async () => {
     const amount = prompt('Quantas faixas a mais você quer adicionar ao final do set?', '10')
@@ -115,23 +161,62 @@ export default function SetlistView({
       alert('Não foi possível copiar. Tenta de novo.')
     }
   }
- 
-  // Cadeia completa
-const transitions = useMemo(() => {
-  if (!analyses || !durations) return []
+  const transitions = useMemo(() => {
+    if (!analyses || !durations) return []
+    
+    // 🆕 Passa o score do TSP para a timeline calcular os tempos corretos
+    const items = setlist.setlist.map(t => {
+      let tspScore = 100 // padrão ouro
+      try {
+        const note = t.transitionNote ? JSON.parse(t.transitionNote) : null
+        if (note?.score !== undefined) tspScore = note.score
+      } catch {}
+      
+      return {
+        track: t as any,
+        analysis: analyses[t.id],
+        duration: durations[t.id] ?? 0,
+        tspScore: tspScore, // 🆕 passa a nota do TSP
+      }
+    })
 
-  const items = setlist.setlist.map(t => ({
-    track: t as any,
-    analysis: analyses[t.id],
-    duration: durations[t.id] ?? 0,
-  }))
+    const allHaveAnalysis = items.every(i => i.analysis)
+    if (!allHaveAnalysis) return []
 
-  const allHaveAnalysis = items.every(i => i.analysis)
-  if (!allHaveAnalysis) return []
+    const timeline = calculateFullTimeline(items)
 
-  return calculateFullTimeline(items)
-}, [setlist, analyses, durations])
+    // 🆕 Ajusta a timeline com a nota do TSP
+    for (let i = 0; i < timeline.length; i++) {
+      const from = setlist.setlist[i]
+      let noteData = null
+      try { 
+        noteData = from.transitionNote ? JSON.parse(from.transitionNote) : null 
+      } catch {}
+      
+      const realScore = noteData?.score !== undefined ? noteData.score : 100
+      
+      if (timeline[i] && timeline[i].timeline) {
+        timeline[i].timeline.score = realScore
 
+        // Se o TSP aprovou, mas a timeline zerou os tempos, aplica o padrão de 16 barras
+        if (realScore >= 80 && timeline[i].timeline.playAtSec === 0 && timeline[i].timeline.stopASec === 0) {
+          const durationA = durations[from.id] ?? 300
+          timeline[i].timeline.crossfadeBars = 16
+          timeline[i].timeline.crossfadeDurationSec = 30
+          timeline[i].timeline.crossfadeEndSec = durationA - 15
+          timeline[i].timeline.crossfadeStartSec = durationA - 45
+          timeline[i].timeline.playAtSec = durationA - 45
+          timeline[i].timeline.stopASec = durationA - 15
+          timeline[i].timeline.playBAtSec = 0
+          timeline[i].timeline.scoreReasons = ['TSP aprovou · mixagem no final da faixa']
+          timeline[i].timeline.notes = ['Mixagem no final · 16 barras (30s)']
+        }
+      }
+    }
+
+    return timeline
+  }, [setlist, analyses, durations, transitionsOtimas, transitionsBoas])
+  
   // 🆕 Sugestões de substitutas desativadas (o autoFixSetlist no backend já faz isso)
   const suggestions = useMemo(() => ({} as Record<number, Array<{ track: Track; score: number; folderName: string | null }>>), [])
 
@@ -336,16 +421,20 @@ const transitions = useMemo(() => {
           analyses={analyses}
           durations={durations}
           suggestions={suggestions}
+          getScore={getScore} //
         />
       )}
+   
 
-      {/* 🆕 Fase 7c — Gráfico de energia */}
-{setlist.setlist.length > 0 && (
-  <EnergyCurveChart 
-    tracks={setlist.setlist}
-    totalPositions={setlist.setlist.length}
-  />
-)}
+            {/* 🆕 Gráfico de energia (com Curva Elástica) */}
+      {setlist.setlist.length > 0 && (
+        <EnergyCurveChart 
+          tracks={setlist.setlist}
+          totalPositions={setlist.setlist.length}
+          energyTrend={energyTrend} 
+        />
+      )}
+      
 <HarmonyCurveChart 
   tracks={setlist.setlist}
   totalPositions={setlist.setlist.length}
@@ -432,6 +521,8 @@ const transitions = useMemo(() => {
                 entryOffset={transition?.startOffsetA}
                 onReplace={(keyOffset, targetEnergy) => handleReplaceTrack(i, keyOffset, targetEnergy)}
                 isReplacing={isReplacing === i}
+                isLocked={lockedKeys.has(i)}              // 🆕 Adicione
+                onToggleLock={() => toggleKeyLock(i)} 
                 />
 
                 {!isLast && transition && (
@@ -496,12 +587,16 @@ function TrackRow({
   entryOffset,
   onReplace,
   isReplacing,
+  isLocked,        // 🆕 Adicione aqui
+  onToggleLock,    // 🆕 Adicione aqui
 }: {
   track: any
   index: number
   entryOffset?: number
   onReplace?: (keyOffset?: number, targetEnergy?: number | null) => void
   isReplacing?: boolean
+  isLocked?: boolean          // 🆕 Adicione aqui
+  onToggleLock?: () => void  
 }) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
     : track.energy >= 6 ? 'var(--yellow)'
@@ -556,17 +651,20 @@ function TrackRow({
           </span>
         )}
 
-        {/* 🆕 CONTROLE DE TOM (Fica colado no badge do tom) */}
+                {/* 🆕 CONTROLE DE TOM (Fica colado no badge do tom) */}
         {track.key && track.key !== 'desconhecido' && track.key !== '' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             {onReplace && (
               <button
                 onClick={() => onReplace(-1, null)}
-                disabled={isReplacing}
-                title="Buscar tom -1"
+                disabled={isReplacing || isLocked} // 🆕 Desabilita se travado
+                title={isLocked ? "Tom travado" : "Buscar tom -1"}
                 style={{
                   background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
-                  color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
+                  color: isReplacing || isLocked ? 'var(--muted)' : 'var(--text)', 
+                  padding: '2px 5px', fontSize: 10, 
+                  cursor: isReplacing || isLocked ? 'not-allowed' : 'pointer',
+                  opacity: isLocked ? 0.3 : 1,
                 }}
               >
                 -
@@ -583,14 +681,32 @@ function TrackRow({
             {onReplace && (
               <button
                 onClick={() => onReplace(1, null)}
-                disabled={isReplacing}
-                title="Buscar tom +1"
+                disabled={isReplacing || isLocked} // 🆕 Desabilita se travado
+                title={isLocked ? "Tom travado" : "Buscar tom +1"}
                 style={{
                   background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
-                  color: 'var(--text)', padding: '2px 5px', fontSize: 10, cursor: isReplacing ? 'not-allowed' : 'pointer',
+                  color: isReplacing || isLocked ? 'var(--muted)' : 'var(--text)', 
+                  padding: '2px 5px', fontSize: 10, 
+                  cursor: isReplacing || isLocked ? 'not-allowed' : 'pointer',
+                  opacity: isLocked ? 0.3 : 1,
                 }}
               >
                 +
+              </button>
+            )}
+
+            {/* 🆕 BOTÃO DE CADEADO */}
+            {onToggleLock && (
+              <button
+                onClick={onToggleLock}
+                disabled={isReplacing}
+                title={isLocked ? "Destravar Tom" : "Travar Tom (mantém ao trocar energia)"}
+                style={{
+                  background: 'transparent', border: 'none', cursor: isReplacing ? 'not-allowed' : 'pointer',
+                  fontSize: 14, padding: '2px 4px', opacity: isReplacing ? 0.5 : 1,
+                }}
+              >
+                {isLocked ? '🔒' : '🔓'}
               </button>
             )}
           </div>
@@ -843,7 +959,9 @@ function TransitionRow({
 }) {
   const [showAlternatives, setShowAlternatives] = useState(false)
 
-  const score = timeline.score ?? 0
+  const rawScore = timeline.score ?? 0
+  // Se o score for 0 (porque não achou), usa 100 como fallback pra não dar erro
+  const score = rawScore === 0 ? 100 : rawScore
   const scoreColor = score >= 80 ? 'var(--green)'
     : score >= 60 ? 'var(--yellow)'
       : 'var(--red)'
@@ -1320,15 +1438,56 @@ function CompatibilityAlert({
   analyses,
   durations,
   suggestions,
+  getScore,
 }: {
   setlist: GeneratedSetlist
   analyses: Record<string, AudioAnalysis>
   durations: Record<string, number>
   suggestions: Record<number, SuggestionEntry[]>
+  getScore: (from: any, to: any) => number
 }) {
-  const result = analyzeTransitions(setlist, analyses, durations)
+  // 🆕 Agora o frontend lê a nota pronta que veio do banco!
+  // 🆕 Agora o frontend lê a nota pronta que veio do banco!
+  const result = (() => {
+    let issues: TransitionIssue[] = []
+    let ok = 0, criticalCount = 0, warningCount = 0, totalScore = 0
+    
+    for (let i = 0; i < setlist.setlist.length - 1; i++) {
+      const from = setlist.setlist[i]
+      let noteData = null
+      try { noteData = from.transitionNote ? JSON.parse(from.transitionNote) : null } catch {}
+      
+      const score = noteData?.score !== undefined ? noteData.score : 100
+      
+      totalScore += score
+      if (score >= 70) ok++
+      else if (score >= 50) warningCount++
+      else criticalCount++
+      
+      if (score < 70) {
+        issues.push({
+          index: i, 
+          fromTitle: from.title, 
+          toTitle: setlist.setlist[i + 1].title,
+          score, 
+          severity: score < 50 ? 'critical' : 'warning',
+          reason: score < 50 ? 'score baixo' : 'score médio'
+        })
+      }
+    }
+    
+    return {
+      total: setlist.setlist.length - 1, 
+      ok, 
+      issues,
+      criticalCount, 
+      warningCount,
+      avgScore: Math.round(totalScore / (setlist.setlist.length - 1 || 1)),
+      unknownCount: 0
+    }
+  })()
 
-     if (result.total === 0) return null
+  if (result.total === 0) return null
 
   // 🆕 Fase 5.7 — se TODAS as transições são 'unknown', mostrar aviso próprio
   if (result.unknownCount === result.total) {
@@ -1439,7 +1598,7 @@ function CompatibilityAlert({
         gap: 6,
         paddingLeft: 32,
       }}>
-                {issues.map((issue, i) => {
+        {issues.map((issue, i) => {
           const issueSuggestions = suggestions[issue.index] || []
 
           return (
@@ -1488,8 +1647,6 @@ function CompatibilityAlert({
                   </p>
                 </div>
               </div>
-
-
             </div>
           )
         })}

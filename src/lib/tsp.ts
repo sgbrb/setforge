@@ -1,24 +1,10 @@
 // ============================================================
 // TSP — Seleção inteligente de N faixas de uma biblioteca grande
 // ============================================================
-//
-// Referência bibliográfica:
-//   D. S. Johnson, L. A. McGeoch — "The Traveling Salesman Problem:
-//   A Case Study in Local Optimization" (1997)
-//   Applegate, Bixby, Chvátal, Cook — "The Traveling Salesman Problem:
-//   A Computational Study" (2006)
-//
-// Algoritmo:
-//   1. Pré-filtro (BPM ± range + Camelot estrito)
-//   2. Construção greedy multi-start (100 sementes)
-//   3. 2-opt (troca 2 arestas)
-//   4. Or-opt (move blocos de 1-3 faixas)
-//
-// Objetivo: ~5% do ótimo global em < 5s para 9.378 faixas.
-// ============================================================
 
 import { Track } from './types'
-import { getTransitionScore } from './harmonic-utils'
+// 🆕 Adicionado getMixPoints
+import { getTransitionScore, getMixPoints } from './harmonic-utils'
 
 export interface TspOptions {
   count: number
@@ -29,7 +15,7 @@ export interface TspOptions {
   multiStart?: number
   twoOptPasses?: number
   usagePenalty?: Record<string, number>
-  minTransitionScore?: number // 🆕 Padrão Ouro
+  minTransitionScore?: number
   energyCurve?: { target: number }[] 
 }
 
@@ -37,13 +23,15 @@ export interface TspResult {
   tracks: Track[]
   averageScore: number
   worstScore: number
-  worstTransition?: { fromTitle: string; toTitle: string; score: number } // 🆕
-  passedQualityCheck: boolean // 🆕
+  worstTransition?: { fromTitle: string; toTitle: string; score: number }
+  passedQualityCheck: boolean
   candidates: number
   requestedCount: number
   effectiveCount: number
   elapsedMs: number
   seed: number
+  // 🆕 Novo campo
+  mixPoints: Record<string, { mixOutSec: number | null; mixInSec: number | null }>
 }
 
 // ============================================================
@@ -117,15 +105,13 @@ export function filterCandidates(
 }
 
 // ============================================================
-// FASE 1.5 — DIVERSIDADE (Regra 3)
+// FASE 1.5 — DIVERSIDADE
 // ============================================================
 
 export function diversifyPool(
   pool: Track[],
   setSize: number
 ): Track[] {
-
-  // 🆕 Aumentado de /10 para /5 para dar mais opções ao TSP
   const maxPorLetra = Math.max(1, Math.floor(setSize / 5))
 
   const byFamilia = new Map<string, Track[]>()
@@ -181,7 +167,6 @@ function nearestNeighbor(
     for (let i = 0; i < remaining.length; i++) {
       const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty, energyCurve)
       
-      // Padrão Ouro
       if (minTransitionScore !== undefined && score < minTransitionScore) {
         continue
       }
@@ -192,7 +177,6 @@ function nearestNeighbor(
       }
     }
 
-    // Fallback se nenhuma passou no padrão
     if (bestScore === -1) {
       for (let i = 0; i < remaining.length; i++) {
         const score = getTransitionScore(last, remaining[i], result.length - 1, count, usagePenalty, energyCurve)
@@ -337,6 +321,7 @@ function orOpt(
 
   return best
 }
+
 // ============================================================
 // ORQUESTRADOR — MULTI-START + 2-OPT + OR-OPT
 // ============================================================
@@ -372,6 +357,7 @@ export function generateSmartSet(
       effectiveCount: 0,
       elapsedMs: Date.now() - startTime,
       seed,
+      mixPoints: {} // 🆕
     }
   }
 
@@ -383,7 +369,6 @@ export function generateSmartSet(
 
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
-    // 🆕 Passa energyCurve e minTransitionScore na ordem certa
     const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty, energyCurve, minTransitionScore)
     const score = scoreOrder(order, usagePenalty, energyCurve)
 
@@ -393,11 +378,9 @@ export function generateSmartSet(
     }
   }
 
-  // 🆕 Passa energyCurve e minTransitionScore
   bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, energyCurve, minTransitionScore)
   bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
 
-  // 🆕 Passa energyCurve e minTransitionScore
   bestOrder = orOpt(bestOrder, 3, usagePenalty, energyCurve, minTransitionScore)
   bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
 
@@ -407,7 +390,6 @@ export function generateSmartSet(
   let worstToTitle = ''
 
   for (let i = 0; i < bestOrder.length - 1; i++) {
-    // 🆕 Passa energyCurve para o cálculo do worstScore também
     const s = getTransitionScore(bestOrder[i], bestOrder[i + 1], i, bestOrder.length, usagePenalty, energyCurve)
     if (s < worst) {
       worst = s
@@ -422,6 +404,17 @@ export function generateSmartSet(
       : 0
 
   const passedQualityCheck = minTransitionScore === undefined || worst >= minTransitionScore
+
+  // 🆕 Calcula onde mixar cada faixa
+  const mixPoints: Record<string, { mixOutSec: number | null; mixInSec: number | null }> = {}
+  for (let i = 0; i < bestOrder.length - 1; i++) {
+    const from = bestOrder[i]
+    const to = bestOrder[i + 1]
+    const mp = getMixPoints(from.id, to.id)
+    if (mp.mixInSec !== null || mp.mixOutSec !== null) {
+      mixPoints[`${i}`] = mp
+    }
+  }
 
   return {
     tracks: bestOrder,
@@ -438,5 +431,6 @@ export function generateSmartSet(
     effectiveCount,
     elapsedMs: Date.now() - startTime,
     seed,
+    mixPoints, // 🆕
   }
 }

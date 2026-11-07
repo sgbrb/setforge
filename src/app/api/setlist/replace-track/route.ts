@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
 
     const body = await req.json()
-    const { setlistId, positionToReplace, rejectedIds = [], keyOffset = 0, targetEnergy = null } = body
+    const { setlistId, positionToReplace, rejectedIds = [], keyOffset = 0, targetEnergy = null, forcedKey = null } = body
 
     const setlist = await prisma.setlist.findUnique({
       where: { id: setlistId },
@@ -42,6 +42,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 🆕 Salva a rejeição no banco (aprendizado permanente)
+    if (currentTrack.trackId) {
+      try {
+        await prisma.rejectedTrack.upsert({
+          where: {
+            userId_trackId: {
+              userId: session.user.id,
+              trackId: currentTrack.trackId,
+            },
+          },
+          create: {
+            userId: session.user.id,
+            trackId: currentTrack.trackId,
+          },
+          update: {},
+        })
+      } catch (err) {
+        console.warn('[replace-track] Falha ao salvar rejeição:', err)
+      }
+    }
+
     const recentSets = await prisma.setlist.findMany({
       where: { userId: session.user.id },
       orderBy: { createdAt: 'desc' },
@@ -55,10 +76,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 🆕 Busca rejeições do banco (para ignorar)
+    const rejectedTracks = await prisma.rejectedTrack.findMany({
+      where: { userId: session.user.id },
+      select: { trackId: true },
+    })
+    const rejectedTrackIds = new Set(rejectedTracks.map(r => r.trackId))
+
     const currentIds = tracks.map(t => t.trackId).filter(Boolean) as string[]
     const allBlocked = [...currentIds, ...rejectedIds]
 
-       const allCandidates = await prisma.track.findMany({
+    const allCandidates = await prisma.track.findMany({
       where: {
         userId: session.user.id,
         id: { notIn: allBlocked },
@@ -67,26 +95,29 @@ export async function POST(req: NextRequest) {
       select: { id: true, title: true, artist: true, bpm: true, key: true, segments: true, durationSec: true },
     })
 
-        // 🆕 FILTRO ABSOLUTO DE ENERGIA
-    // Se o usuário clicou em + ou -, só permitimos músicas com energia muito próxima
-    let candidatesWithEnergy = allCandidates
+    // 🆕 Remove as rejeitadas do banco de candidatas
+    let candidatesFiltered = allCandidates.filter(c => !rejectedTrackIds.has(c.id))
+
+    // 🆕 FILTRO ABSOLUTO DE ENERGIA
     if (targetEnergy !== null) {
-      candidatesWithEnergy = allCandidates.filter(c => {
+      candidatesFiltered = candidatesFiltered.filter(c => {
         const cEnergy = (c.segments as any)?.energy || 0
-        return Math.abs(cEnergy - targetEnergy) <= 0.5 // Tolerância de apenas 0.5 (quase exato)
+        return Math.abs(cEnergy - targetEnergy) <= 0.5
       })
     }
 
-    // Se o filtro de energia não achar nada, avisa o usuário
-    if (candidatesWithEnergy.length === 0) {
+    if (candidatesFiltered.length === 0) {
       return NextResponse.json({ 
         error: `Nenhuma faixa com energia exata ${targetEnergy}. Tente outro valor ou adicione mais músicas.` 
       }, { status: 400 })
     }
 
-    // 🆕 Aplica o filtro de Tom em cima da lista de energia
-    let filtered = candidatesWithEnergy 
-    if (keyOffset !== 0 && targetKeyNum !== null && targetKeyLetter !== null) {
+    // 🆕 Aplica o filtro de Tom
+    let filtered = candidatesFiltered
+    
+    if (forcedKey) {
+      filtered = filtered.filter(c => c.key === forcedKey)
+    } else if (keyOffset !== 0 && targetKeyNum !== null && targetKeyLetter !== null) {
       filtered = filtered.filter(c => {
         if (!c.key) return false
         const cNum = parseInt(c.key.slice(0, -1), 10)
@@ -110,14 +141,10 @@ export async function POST(req: NextRequest) {
       if (prevTrack) score += getTransitionScore(prevTrack as any, c as any, index - 1, tracks.length)
       if (nextTrack) score += getTransitionScore(c as any, nextTrack as any, index, tracks.length)
       if (score > bestScore) {
-      bestScore = score
-      bestCandidate = c
+        bestScore = score
+        bestCandidate = c
       }
-      }
-      
-    
-        
-  
+    }
 
     if (!bestCandidate) {
       return NextResponse.json({ error: 'Nenhuma faixa encontrada.' }, { status: 400 })

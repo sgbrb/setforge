@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  url       = env("DIRECT_URL")
 }
 
 model User {
@@ -17,6 +17,7 @@ model User {
   setlists  Setlist[]
   tracks    Track[]
   folders   Folder[]
+  rejectedTracks RejectedTrack[]
 }
 
 model Folder {
@@ -58,15 +59,20 @@ model Track {
   key          String   @default("")
   energy       Int      @default(7)
   durationSec  Float    @default(0)
-  firstBeatSec  Float    @default(0)   // 🆕
+  firstBeatSec Float    @default(0)   // 🆕
   segments     Json?
   fileHash     String?
-  rekordboxId   String?  @unique    // 🆕 TrackID do Rekordbox
+  rekordboxId  String?  @unique    // 🆕 TrackID do Rekordbox
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   folder       Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
   folderTracks FolderTrack[]    
+  
+  // 🆕 Adicionado agora para as transições
+  transitionsFrom TrackTransition[] @relation("FromTrack")
+  transitionsTo   TrackTransition[] @relation("ToTrack")
 
   @@index([userId])
   @@index([folderId])
@@ -107,4 +113,30 @@ model SetlistTrack {
   transitionNote String?
   setlistId      String
   setlist        Setlist @relation(fields: [setlistId], references: [id], onDelete: Cascade)
+}
+
+model TrackTransition {
+  id          String   @id @default(cuid())
+  fromTrackId String
+  toTrackId   String
+  score       Float    // Nota de 0 a 100 da transição
+  mixInSec    Float?   // Onde a música B deve começar (em segundos)
+  mixOutSec   Float?   // Onde a música A deve terminar (em segundos)
+  
+  fromTrack   Track    @relation("FromTrack", fields: [fromTrackId], references: [id], onDelete: Cascade)
+  toTrack     Track    @relation("ToTrack", fields: [toTrackId], references: [id], onDelete: Cascade)
+
+  @@unique([fromTrackId, toTrackId])
+  @@index([fromTrackId, score])
+}
+model RejectedTrack {
+  id        String   @id @default(cuid())
+  userId    String
+  trackId   String
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, trackId])
+  @@index([userId])
 }
