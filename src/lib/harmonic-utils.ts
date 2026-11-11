@@ -40,6 +40,169 @@ function getTransitionsBoas() {
 }
 
 // ============================================================
+// 🆕 PERFIL DE GÊNERO — ÂNCORAS NARRATIVAS
+// ============================================================
+
+/**
+ * Perfil de gênero que define quantas âncoras (micro-picos e micro-vales)
+ * o TSP deve tentar criar ao longo do set.
+ *
+ * Baseado no diagnóstico da biblioteca do Bruno (11/11/2026):
+ * - inst + chorus = 68.7% dos segmentos
+ * - breakdown = 0% (não é trance)
+ * - energia média = 8.82, mediana = 8.9
+ * - chorus médio = 19.1s (picos curtos e frequentes)
+ * → tech house / minimal / melodic techno de peak time
+ */
+export interface GenreProfile {
+  name: string
+  /** Energia mínima pra uma faixa contar como micro-pico */
+  peakEnergyMin: number
+  /** Energia máxima pra uma faixa contar como micro-vale */
+  valleyEnergyMax: number
+  /** Bônus aplicado quando a posição bate com uma âncora de pico */
+  peakBonus: number
+  /** Bônus aplicado quando a posição bate com uma âncora de vale */
+  valleyBonus: number
+  /** Distância mínima (em faixas) entre duas âncoras do mesmo tipo */
+  minAnchorGap: number
+}
+
+export function getGenreProfile(genre: 'tech-house' | 'trance' = 'tech-house'): GenreProfile {
+  if (genre === 'trance') {
+    // Perfil pra trance/progressive (não é o caso da biblioteca atual, mas deixo pronto)
+    return {
+      name: 'trance',
+      peakEnergyMin: 9,
+      valleyEnergyMax: 7,
+      peakBonus: 60,
+      valleyBonus: 35,
+      minAnchorGap: 6,
+    }
+  }
+
+  // Perfil padrão: tech house / minimal / melodic techno de peak time
+  return {
+    name: 'tech-house',
+    peakEnergyMin: 9,      // energia 9 ou 10 = micro-pico
+    valleyEnergyMax: 8,    // energia 8 ou menos = micro-vale
+    peakBonus: 40,
+    valleyBonus: 25,
+    minAnchorGap: 3,       // pelo menos 3 faixas entre âncoras do mesmo tipo
+  }
+}
+
+/**
+ * Calcula quantas âncoras (picos e vales) o set deve ter, baseado no tamanho.
+ * Regra adaptativa: a densidade de âncoras escala com a duração, mas não linearmente.
+ */
+export function getAnchorCounts(setSize: number): { peaks: number; valleys: number } {
+  if (setSize < 10) {
+    return { peaks: 0, valleys: 0 } // set muito curto, sem âncoras
+  }
+  if (setSize < 20) {
+    return { peaks: 2, valleys: 1 }
+  }
+  if (setSize < 35) {
+    return { peaks: 3, valleys: 2 }
+  }
+  if (setSize < 60) {
+    return { peaks: 4, valleys: 3 }
+  }
+  return { peaks: 5, valleys: 4 }
+}
+
+/**
+ * Calcula o bônus de âncora pra uma posição específica do set.
+ * Retorna positivo se a faixa "casa" com a âncora esperada, negativo se "quebra" o padrão.
+ *
+ * Lógica:
+ * - Define as posições de pico e vale como frações do total.
+ * - Se a trackEnergy casa com o tipo de âncora naquela posição → bônus.
+ * - Se a trackEnergy contradiz a âncora (ex: energia 10 num vale) → penalidade.
+ * - Fora das janelas de âncora → 0 (sem influência).
+ */
+export function getAnchorBonus(
+  position: number,
+  total: number,
+  trackEnergy: number,
+  profile: GenreProfile
+): number {
+  if (total < 10 || position < 0 || position >= total) return 0
+  if (!trackEnergy || trackEnergy <= 0) return 0
+
+  const counts = getAnchorCounts(total)
+  if (counts.peaks === 0) return 0
+
+  // Janela de tolerância em torno da âncora (em fração do set)
+  // Ex: set de 30 faixas → janela de ±2 faixas = ±0.067
+  const windowSize = Math.max(1.5 / total, 0.04)
+  const pct = position / total
+
+  let bonus = 0
+
+  // ─── Verifica se está perto de um micro-pico ───
+  const peakPositions = computeAnchorPositions(counts.peaks, 'peak')
+  for (const peakPct of peakPositions) {
+    if (Math.abs(pct - peakPct) <= windowSize) {
+      if (trackEnergy >= profile.peakEnergyMin) {
+        bonus += profile.peakBonus
+      } else if (trackEnergy <= profile.valleyEnergyMax) {
+        // Pico deveria ser alto, mas veio baixo → penaliza
+        bonus -= Math.round(profile.peakBonus * 0.6)
+      }
+      break // só aplica uma vez por posição
+    }
+  }
+
+  // ─── Verifica se está perto de um micro-vale ───
+  const valleyPositions = computeAnchorPositions(counts.valleys, 'valley')
+  for (const valleyPct of valleyPositions) {
+    if (Math.abs(pct - valleyPct) <= windowSize) {
+      if (trackEnergy <= profile.valleyEnergyMax) {
+        bonus += profile.valleyBonus
+      } else if (trackEnergy >= profile.peakEnergyMin + 1) {
+        // Vale deveria ser baixo, mas veio muito alto → penaliza
+        bonus -= Math.round(profile.valleyBonus * 0.6)
+      }
+      break
+    }
+  }
+
+  return bonus
+}
+
+/**
+ * Calcula as posições (em fração 0-1) onde as âncoras devem cair.
+ * - Picos: distribuídos em [0.20, 0.85] uniformemente.
+ * - Vales: intercalados entre os picos (nunca no início nem no fim).
+ */
+function computeAnchorPositions(count: number, type: 'peak' | 'valley'): number[] {
+  if (count <= 0) return []
+
+  if (type === 'peak') {
+    // Picos distribuídos entre 20% e 85% do set
+    if (count === 1) return [0.75]
+    if (count === 2) return [0.30, 0.75]
+    if (count === 3) return [0.25, 0.55, 0.85]
+    if (count === 4) return [0.20, 0.42, 0.64, 0.86]
+    // 5+
+    return Array.from({ length: count }, (_, i) =>
+      0.20 + (0.65 * i) / (count - 1)
+    )
+  }
+
+  // Vales: intercalados entre os picos
+  if (count === 1) return [0.55]
+  if (count === 2) return [0.40, 0.70]
+  if (count === 3) return [0.33, 0.55, 0.77]
+  if (count === 4) return [0.28, 0.45, 0.62, 0.79]
+  return Array.from({ length: count }, (_, i) =>
+    0.28 + (0.55 * i) / (count - 1)
+  )
+}
+
+// ============================================================
 // FUNÇÕES AUXILIARES
 // ============================================================
 
@@ -108,6 +271,29 @@ export function getTransitionScore(
   const energyB = (trackB as any).energy || 0
   const energyDiffBetweenTracks = Math.abs(energyA - energyB)
 
+  // 🆕 BÔNUS DE ESTRUTURA (para forçar 32 barras)
+  let structureBonus = 0
+  try {
+    const segA = (trackA as any).segments
+    const segB = (trackB as any).segments
+    if (segA?.segments && segB?.segments) {
+      // Pega o último segmento da A (ignorando o 'end')
+      const lastSegA = segA.segments[segA.segments.length - 2]
+      // Pega o primeiro segmento da B (ignorando o 'start')
+      const firstSegB = segB.segments[1]
+      
+      const lastLabelA = lastSegA?.label?.toLowerCase() || ''
+      const firstLabelB = firstSegB?.label?.toLowerCase() || ''
+      
+      // Se a A termina com 'outro' ou 'inst' e a B começa com 'intro' ou 'inst', ganha bônus
+      if (['outro', 'inst'].includes(lastLabelA) && ['intro', 'inst'].includes(firstLabelB)) {
+        structureBonus = 15 // Bônus de 15 pontos
+      }
+    }
+  } catch (e) {
+    // Se não tiver segments, ignora
+  }
+
   // 1) Tenta buscar no cache de transições ótimas (90+)
   const otimas = getTransitionsOtimas()
   let match = otimas[trackA.id]?.find(o => o.toTrackId === trackB.id)
@@ -130,6 +316,10 @@ export function getTransitionScore(
     if (usagePenalty && usagePenalty[trackB.id]) {
       score *= (1 - usagePenalty[trackB.id])
     }
+    
+    // 🆕 Aplica o bônus de estrutura no caminho do cache
+    score += structureBonus
+
     return Math.round(Math.max(0, score))
   }
 
@@ -177,6 +367,9 @@ export function getTransitionScore(
     const avg = (pA + pB) / 2
     finalScore = finalScore * (1 - avg)
   }
+
+  // 🆕 Aplica o bônus de estrutura no fallback
+  finalScore += structureBonus
 
   return Math.round(Math.max(0, finalScore))
 }

@@ -3,8 +3,14 @@
 // ============================================================
 
 import { Track } from './types'
-// 🆕 Adicionado getMixPoints
-import { getTransitionScore, getMixPoints } from './harmonic-utils'
+// 🆕 Adicionado getMixPoints + âncoras narrativas
+import {
+  getTransitionScore,
+  getMixPoints,
+  getAnchorBonus,
+  getGenreProfile,
+  type GenreProfile,
+} from './harmonic-utils'
 
 export interface TspOptions {
   count: number
@@ -17,6 +23,8 @@ export interface TspOptions {
   usagePenalty?: Record<string, number>
   minTransitionScore?: number
   energyCurve?: { target: number }[] 
+  // 🆕 Perfil de gênero pra âncoras narrativas
+  genre?: 'tech-house' | 'trance'
 }
 
 export interface TspResult {
@@ -198,17 +206,34 @@ function nearestNeighbor(
 // FASE 3 — REFINAMENTO: 2-OPT
 // ============================================================
 
+/**
+ * 🆕 scoreOrder agora soma o bônus de âncora narrativa (micro-picos e micro-vales).
+ * O bônus NÃO entra na getTransitionScore — é uma métrica GLOBAL do set,
+ * aplicada em cada posição. Isso preserva o Padrão Ouro (minTransitionScore).
+ */
 function scoreOrder(
   tracks: Track[],
   usagePenalty?: Record<string, number>,
-  energyCurve?: { target: number }[]
+  energyCurve?: { target: number }[],
+  genreProfile?: GenreProfile
 ): number {
   if (tracks.length <= 1) return 0
   let total = 0
   const N = tracks.length
+
+  // Soma das transições locais (Padrão Ouro)
   for (let i = 0; i < tracks.length - 1; i++) {
     total += getTransitionScore(tracks[i], tracks[i + 1], i, N, usagePenalty, energyCurve)
   }
+
+  // 🆕 Bônus/penalidade de âncora narrativa por posição
+  if (genreProfile) {
+    for (let i = 0; i < tracks.length; i++) {
+      const trackEnergy = (tracks[i] as any).energy || 0
+      total += getAnchorBonus(i, N, trackEnergy, genreProfile)
+    }
+  }
+
   return total
 }
 
@@ -217,13 +242,14 @@ function twoOpt(
   passes: number,
   usagePenalty?: Record<string, number>,
   energyCurve?: { target: number }[],
-  minTransitionScore?: number
+  minTransitionScore?: number,
+  genreProfile?: GenreProfile
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best, usagePenalty, energyCurve)
+  let bestScore = scoreOrder(best, usagePenalty, energyCurve, genreProfile)
 
   for (let pass = 0; pass < passes; pass++) {
     let improved = false
@@ -249,7 +275,7 @@ function twoOpt(
 
         if (violates) continue
 
-        const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve)
+        const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve, genreProfile)
 
         if (candidateScore > bestScore) {
           best = candidate
@@ -274,13 +300,14 @@ function orOpt(
   maxBlockSize: number = 3,
   usagePenalty?: Record<string, number>,
   energyCurve?: { target: number }[],
-  minTransitionScore?: number
+  minTransitionScore?: number,
+  genreProfile?: GenreProfile
 ): Track[] {
   const n = tracks.length
   if (n < 4) return tracks
 
   let best = [...tracks]
-  let bestScore = scoreOrder(best, usagePenalty, energyCurve)
+  let bestScore = scoreOrder(best, usagePenalty, energyCurve, genreProfile)
   let improved = true
 
   while (improved) {
@@ -307,7 +334,7 @@ function orOpt(
 
           if (violates) continue
 
-          const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve)
+          const candidateScore = scoreOrder(candidate, usagePenalty, energyCurve, genreProfile)
 
           if (candidateScore > bestScore) {
             best = candidate
@@ -342,6 +369,10 @@ export function generateSmartSet(
   const usagePenalty = options.usagePenalty
   const minTransitionScore = options.minTransitionScore
 
+  // 🆕 Cria o perfil de gênero pra âncoras narrativas
+  const genreProfile = getGenreProfile(options.genre ?? 'tech-house')
+  console.log(`[tsp] Gênero: ${genreProfile.name} · pico≥${genreProfile.peakEnergyMin} (+${genreProfile.peakBonus}) · vale≤${genreProfile.valleyEnergyMax} (+${genreProfile.valleyBonus})`)
+
   const filtered = filterCandidates(library, bpmTarget, bpmRange, minCamelotScore)
   const diversified = diversifyPool(filtered, count)
   const effectiveCount = Math.min(count, diversified.length)
@@ -370,7 +401,7 @@ export function generateSmartSet(
   for (let s = 0; s < multiStart; s++) {
     const startIdx = Math.floor(rng() * candidates.length)
     const order = nearestNeighbor(candidates, startIdx, effectiveCount, usagePenalty, energyCurve, minTransitionScore)
-    const score = scoreOrder(order, usagePenalty, energyCurve)
+    const score = scoreOrder(order, usagePenalty, energyCurve, genreProfile)
 
     if (score > bestScore) {
       bestScore = score
@@ -378,11 +409,11 @@ export function generateSmartSet(
     }
   }
 
-  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, energyCurve, minTransitionScore)
-  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
+  bestOrder = twoOpt(bestOrder, twoOptPasses, usagePenalty, energyCurve, minTransitionScore, genreProfile)
+  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve, genreProfile)
 
-  bestOrder = orOpt(bestOrder, 3, usagePenalty, energyCurve, minTransitionScore)
-  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve)
+  bestOrder = orOpt(bestOrder, 3, usagePenalty, energyCurve, minTransitionScore, genreProfile)
+  bestScore = scoreOrder(bestOrder, usagePenalty, energyCurve, genreProfile)
 
   // MÉTRICAS
   let worst = 100
