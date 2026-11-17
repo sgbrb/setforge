@@ -271,27 +271,39 @@ export function getTransitionScore(
   const energyB = (trackB as any).energy || 0
   const energyDiffBetweenTracks = Math.abs(energyA - energyB)
 
-  // 🆕 BÔNUS DE ESTRUTURA (para forçar 32 barras)
-  let structureBonus = 0
+  // 🆕 ANÁLISE ESTRUTURAL (Structure-First)
+  // Verifica se a A tem saída limpa e a B tem entrada limpa
+  let structureScore = 0
+  let structureLabel = 'estrutura neutra'
   try {
     const segA = (trackA as any).segments
     const segB = (trackB as any).segments
     if (segA?.segments && segB?.segments) {
-      // Pega o último segmento da A (ignorando o 'end')
       const lastSegA = segA.segments[segA.segments.length - 2]
-      // Pega o primeiro segmento da B (ignorando o 'start')
       const firstSegB = segB.segments[1]
       
       const lastLabelA = lastSegA?.label?.toLowerCase() || ''
       const firstLabelB = firstSegB?.label?.toLowerCase() || ''
       
-      // Se a A termina com 'outro' ou 'inst' e a B começa com 'intro' ou 'inst', ganha bônus
-      if (['outro', 'inst'].includes(lastLabelA) && ['intro', 'inst'].includes(firstLabelB)) {
-        structureBonus = 15 // Bônus de 15 pontos
+      // A tem saída limpa? (outro, inst, breakdown)
+      const aHasCleanExit = ['outro', 'inst', 'breakdown'].includes(lastLabelA)
+      // B tem entrada limpa? (intro, inst)
+      const bHasCleanEnter = ['intro', 'inst'].includes(firstLabelB)
+      
+      if (aHasCleanExit && bHasCleanEnter) {
+        structureScore = 40 // Bônus massivo
+        structureLabel = 'estrutura perfeita (saída limpa + entrada limpa)'
+      } else if (aHasCleanExit || bHasCleanEnter) {
+        structureScore = 10 // Bônus parcial
+        structureLabel = 'estrutura parcial (só um dos lados limpo)'
+      } else {
+        // Nenhum dos lados tem saída/entrada limpa
+        structureScore = -40 // Penalidade severa
+        structureLabel = 'estrutura ruim (sem saída/entrada limpa)'
       }
     }
   } catch (e) {
-    // Se não tiver segments, ignora
+    // Se não tiver segments, mantém estrutura neutra (0)
   }
 
   // 1) Tenta buscar no cache de transições ótimas (90+)
@@ -307,8 +319,10 @@ export function getTransitionScore(
   if (match) {
     let score = match.score
 
-    // 🆕 Aplica a penalidade de energia em cima da nota do arquivo
-    // Se pular mais de 1 nível (ex: 8 -> 10), perde pontos
+    // 🆕 Aplica a estrutura ANTES de tudo
+    score += structureScore
+
+    // Aplica a penalidade de energia em cima da nota
     if (energyDiffBetweenTracks > 1.5) {
       score -= (energyDiffBetweenTracks - 1) * 30
     }
@@ -316,9 +330,11 @@ export function getTransitionScore(
     if (usagePenalty && usagePenalty[trackB.id]) {
       score *= (1 - usagePenalty[trackB.id])
     }
-    
-    // 🆕 Aplica o bônus de estrutura no caminho do cache
-    score += structureBonus
+
+    // Log para debug (opcional, pode remover depois)
+    if (structureScore === -40) {
+      console.log(`[tsp] ⚠️ Estrutura ruim: ${trackA.title} → ${trackB.title} (${structureLabel})`)
+    }
 
     return Math.round(Math.max(0, score))
   }
@@ -353,10 +369,14 @@ export function getTransitionScore(
     energyScore -= (energyDiffToTarget - tolerancia) * 50
   }
 
-  const baseScore = energyScore * 0.70 + camelot * 0.20 + bpm * 0.10
+  // Base: harmonia, bpm e energia
+  const baseScore = energyScore * 0.60 + camelot * 0.25 + bpm * 0.15
   let finalScore = baseScore
 
-  // 🆕 Aplica a Regra do ±1 também no fallback
+  // 🆕 Aplica a estrutura no fallback (mesma lógica)
+  finalScore += structureScore
+
+  // Aplica a Regra do ±1 também no fallback
   if (energyDiffBetweenTracks > 1.5) {
     finalScore -= (energyDiffBetweenTracks - 1) * 30
   }
@@ -368,12 +388,8 @@ export function getTransitionScore(
     finalScore = finalScore * (1 - avg)
   }
 
-  // 🆕 Aplica o bônus de estrutura no fallback
-  finalScore += structureBonus
-
   return Math.round(Math.max(0, finalScore))
 }
-
 // ============================================================
 // 🆕 FUNÇÃO DE MIX POINTS
 // ============================================================

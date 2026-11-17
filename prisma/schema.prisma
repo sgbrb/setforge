@@ -18,6 +18,7 @@ model User {
   tracks    Track[]
   folders   Folder[]
   rejectedTracks RejectedTrack[]
+  likedSetlists LikedSetlist[]
 }
 
 model Folder {
@@ -138,5 +139,18 @@ model RejectedTrack {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   @@unique([userId, trackId])
+  @@index([userId])
+}
+model LikedSetlist {
+  id         String   @id @default(cuid())
+  userId     String
+  setlistId  String
+  bpmTarget  Int?
+  energyAvg  Float?
+  createdAt  DateTime @default(now())
+  
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, setlistId])
   @@index([userId])
 }

@@ -65,7 +65,6 @@ function signaturesMatch(
   return false
 }
 
-// 🆕 Curva adaptativa (fallback quando o DJ não escolhe blocos)
 function getAdaptiveEnergyCurve(tracks: FrontendTrack[]): { target: number }[] {
   if (tracks.length === 0) return []
   
@@ -92,7 +91,6 @@ function getAdaptiveEnergyCurve(tracks: FrontendTrack[]): { target: number }[] {
     { target: Math.max(2, baseEnergy - 2) }, 
   ]
 
-  console.log(`[energia] Energia mais comum: ${baseEnergy}. Curva adaptativa: ${curve.map(c => c.target).join(' → ')}`)
   return curve
 }
 
@@ -116,11 +114,9 @@ export async function POST(req: NextRequest) {
     const minCamelotScore = body.camelotStrict ? 85 : 0
     const baseSeed = typeof body.seed === 'number' ? body.seed : BASE_SEED
     
-    // 🆕 Blocos de energia e Tendência
     const customEnergyBlocks: number[] | undefined = Array.isArray(body.energyBlocks) ? body.energyBlocks : undefined
     const energyTrend: 'steady' | 'build' | 'wave' | undefined = body.energyTrend
 
-    // Busca os últimos 100 setlists (Regra B)
     const recentSetlists = await prisma.setlist.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -128,7 +124,6 @@ export async function POST(req: NextRequest) {
       include: { tracks: { select: { trackId: true, title: true } } },
     })
 
-    // Penalidade por uso (Regra A)
     const SETS_RECENT = 10
     const SETS_MEDIUM = 30
     const SETS_OLD = 100
@@ -154,20 +149,32 @@ export async function POST(req: NextRequest) {
 
     const recentSignatures = recentSetlists.map(sl => buildSetlistSignature(sl.tracks))
 
-    // 🆕 Busca as faixas rejeitadas pelo usuário (aprendizado permanente)
     const rejectedTracks = await prisma.rejectedTrack.findMany({
       where: { userId },
       select: { trackId: true },
     })
     const rejectedTrackIds = new Set(rejectedTracks.map(r => r.trackId))
 
-    // Busca faixas (SEM as rejeitadas)
+    const likedSetlists = await prisma.likedSetlist.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    })
+
+    let targetEnergyFromLikes: number | null = null
+    if (likedSetlists.length > 0) {
+      const energies = likedSetlists.map(s => s.energyAvg).filter((e): e is number => e !== null && e > 0)
+      if (energies.length > 0) {
+        targetEnergyFromLikes = energies.reduce((a, b) => a + b, 0) / energies.length
+      }
+    }
+
     const prismaTracks = await prisma.track.findMany({
       where: { 
         userId, 
         bpm: { gt: 0 }, 
         segments: { not: Prisma.DbNull },
-        id: { notIn: Array.from(rejectedTrackIds) } // 🆕 Remove as rejeitadas
+        id: { notIn: Array.from(rejectedTrackIds) }
       },
       select: { 
         id: true, 
@@ -196,7 +203,6 @@ export async function POST(req: NextRequest) {
       }
     })
 
-    // Deduplicação
     const uniqueLibraryMap = new Map<string, FrontendTrack>()
     for (const track of library) {
       const key = normalizeTitle(track.title)
@@ -204,7 +210,6 @@ export async function POST(req: NextRequest) {
     }
     const uniqueLibrary = Array.from(uniqueLibraryMap.values())
 
-    // Filtro de rotação
     const recentForDiversity = await prisma.setlist.findMany({
       where: { userId }, orderBy: { createdAt: 'desc' }, take: 20, 
       include: { tracks: { select: { trackId: true } } },
@@ -233,18 +238,14 @@ export async function POST(req: NextRequest) {
 
     const adaptiveCurve = getAdaptiveEnergyCurve(filteredLibrary)
 
-    // 🆕 Traduz a tendência em uma curva de energia realista
     let finalCurve: { target: number }[]
     
     if (customEnergyBlocks) {
-      // Modo Custom (sliders)
       finalCurve = customEnergyBlocks.map(target => ({ target }))
     } else if (energyTrend === 'steady') {
-      // Manter: energia constante (usa a moda da biblioteca)
-      const baseEnergy = 9 // como sua biblioteca é 8,9,10, o "steady" natural é 9
+      const baseEnergy = 9
       finalCurve = Array.from({ length: 4 }, () => ({ target: baseEnergy }))
     } else if (energyTrend === 'build') {
-      // Subir: começa em 8, vai para 9, 10
       finalCurve = [
         { target: 8 },
         { target: 9 },
@@ -252,7 +253,6 @@ export async function POST(req: NextRequest) {
         { target: 9 },
       ]
     } else if (energyTrend === 'wave') {
-      // Onda: 9 → 10 → 8 → 10
       finalCurve = [
         { target: 9 },
         { target: 10 },
@@ -260,13 +260,9 @@ export async function POST(req: NextRequest) {
         { target: 10 },
       ]
     } else {
-      // Fallback: curva adaptativa antiga
       finalCurve = adaptiveCurve
     }
 
-    console.log(`[energia] Tendência: ${energyTrend || 'custom'}. Curva: ${finalCurve.map(c => c.target).join(' → ')}`)
-
-    // TENTATIVA 1: Padrão Ouro Rígido (Score >= 90)
     let finalResult: ReturnType<typeof generateSmartSet> | null = null
     let attemptUsed = 0
 
@@ -281,29 +277,26 @@ export async function POST(req: NextRequest) {
         twoOptPasses: 2,
         usagePenalty,
         minTransitionScore: 90,
-        energyCurve: finalCurve, // 🆕 usa a curva personalizada
+        energyCurve: finalCurve,
       })
 
       if (result.tracks.length > 0 && result.passedQualityCheck) {
         const signature = buildSetlistSignature(result.tracks.map(t => ({ trackId: t.id, title: t.title })))
         if (!recentSignatures.some(sig => signaturesMatch(sig, signature))) {
-          console.log(`[padrao-ouro] Sucesso na tentativa ${attemptUsed}! Score ${result.averageScore}/100`)
           finalResult = result
           break
         }
       }
     }
 
-    // TENTATIVA 2: Fallback relaxado (Score >= 85)
     if (!finalResult) {
-       console.warn(`[padrao-ouro] Falhou com 90. Tentando relaxar para 85...`)
        for (let attempt = 0; attempt < 20; attempt++) {
          const seed = baseSeed + (attempt * 17)
          const relaxedResult = generateSmartSet(cleanLibrary, {
            count: setSize, bpmTarget, bpmRange, minCamelotScore, seed,
            multiStart: 300,
            twoOptPasses: 2, usagePenalty, minTransitionScore: 85,
-           energyCurve: finalCurve, // 🆕 usa a curva personalizada
+           energyCurve: finalCurve,
          })
          
          if (relaxedResult.tracks.length > 0) {
@@ -322,12 +315,61 @@ export async function POST(req: NextRequest) {
        }, { status: 400 })
     }
 
+    const variety: 'low' | 'medium' | 'high' = body.variety || 'medium'
+    
+    if (finalResult && finalResult.tracks.length > 0) {
+      const lambda = variety === 'high' ? 0.6 : variety === 'low' ? 1.0 : 0.8
+      
+      const tracksWithMMR = finalResult.tracks.map(track => {
+        const similarity = usedIds.has(track.id) ? 1.0 : 0.0
+        const originalScore = finalResult.averageScore
+        let mmrScore = lambda * originalScore - (1 - lambda) * similarity * 100
+        
+        if (targetEnergyFromLikes !== null) {
+          const trackEnergy = (track as any).energy || 0
+          const energyDiff = Math.abs(trackEnergy - targetEnergyFromLikes)
+          if (energyDiff <= 1.5) {
+            mmrScore += 15
+          }
+        }
+        
+        return { track, mmrScore, originalScore }
+      })
+      
+      tracksWithMMR.sort((a, b) => b.mmrScore - a.mmrScore)
+      finalResult.tracks = tracksWithMMR.map(item => item.track)
+    }
+
     const isDuplicate = recentSignatures.some(sig => 
         signaturesMatch(sig, buildSetlistSignature(finalResult!.tracks.map(t => ({ trackId: t.id, title: t.title }))))
     )
 
     const finalTracks = finalResult.tracks
     const fixScore = finalResult.averageScore
+
+    // 🆕 AJUSTE CRÍTICO: Garante que os dados de duração e análise vão para o frontend
+    // Mapeamos a lista final para incluir o objeto segments (análise) e duração
+    const responseTracks = finalTracks.map(t => {
+      // Busca a versão completa dessa faixa na biblioteca do banco para pegar os segments
+      const originalDbTrack = prismaTracks.find(pt => pt.id === t.id)
+      
+            // 🆕 DESANINHA O OBJETO: Se os segments vieram dentro de um objeto, pega apenas o array
+      let finalSegments = originalDbTrack?.segments || null
+      if (finalSegments && typeof finalSegments === 'object' && 'segments' in finalSegments) {
+        finalSegments = (finalSegments as any).segments
+      }
+
+      return {
+        id: t.id, 
+        title: t.title,
+        artist: t.artist,
+        bpm: t.bpm,
+        key: t.key,
+        energy: t.energy,
+        durationSec: originalDbTrack?.durationSec || 0, 
+        segments: finalSegments, // 🆕 Agora é um array puro, não um objeto aninhado
+      }
+    })
 
     const savedSetlist = await prisma.setlist.create({
       data: {
@@ -366,7 +408,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       id: savedSetlist.id,
-      tracks: finalTracks,
+      tracks: responseTracks, // 🆕 Devolve a lista "recheada" com a análise!
       averageScore: fixScore,
       worstScore: finalResult.worstScore,
       candidates: finalResult.candidates,
@@ -377,7 +419,7 @@ export async function POST(req: NextRequest) {
       attempts: attemptUsed,
       duplicate: isDuplicate,
       warning: isDuplicate ? `Esse set já apareceu nos últimos ${RECENT_SETLISTS_FOR_EQUALITY} setlists.` : undefined,
-      filters: { bpmTarget, bpmRange, camelotStrict: !!body.camelotStrict, setSize, energyTrend }, 
+      filters: { bpmTarget, bpmRange, camelotStrict: !!body.camelotStrict, setSize, energyTrend, variety },
       mixPoints: finalResult.mixPoints,
     })
 

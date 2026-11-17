@@ -62,6 +62,13 @@ export interface MixTimeline {
   exitLabel?: string
   enterLabel?: string
   alternatives?: MixPointCandidate[]
+
+  eqAdvice?: {
+    low: string
+    mid: string
+    high: string
+  }
+  bassSwapBar?: number
 }
 
 // ============================================================
@@ -84,6 +91,7 @@ export function formatSecondsWithDecimal(sec: number): string {
 }
 
 export function secondsPerBar(bpm: number): number {
+  if (bpm <= 0) return 2; // Fallback para 120 BPM
   return (60 / bpm) * 4
 }
 
@@ -233,7 +241,6 @@ function listExitCandidates(analysisA: AudioAnalysis, durationA: number, bpm: nu
     const seg = segments[i]
     const label = seg.label.toLowerCase()
 
-    // 🆕 IGNORA start e end, foca nos segmentos musicais
     if (!['chorus', 'drop', 'breakdown', 'outro', 'inst'].includes(label)) continue
     if (seg.end > maxTime) continue
     if (seg.end - seg.start < 4) continue
@@ -249,13 +256,11 @@ function listExitCandidates(analysisA: AudioAnalysis, durationA: number, bpm: nu
     candidates.push({ time: final.snappedSec, label: seg.label })
   }
 
-  // Deduplica
   const dedup: Array<{ time: number; label: string }> = []
   for (const c of candidates) {
     if (!dedup.some(d => Math.abs(d.time - c.time) < 0.5)) dedup.push(c)
   }
 
-  // 🆕 Se não achou nada, pega o penúltimo segmento (o último inst antes do end)
   if (dedup.length === 0 && segments.length > 1) {
     for (let i = segments.length - 2; i >= 0; i--) {
       const seg = segments[i]
@@ -270,16 +275,16 @@ function listExitCandidates(analysisA: AudioAnalysis, durationA: number, bpm: nu
 
   return dedup.slice(-8)
 }
+
 function listEnterCandidates(analysisB: AudioAnalysis, bpm: number, firstBeat: number): Array<{ time: number; label: string }> {
   const candidates: Array<{ time: number; label: string }> = []
-  const segments = analysisB.segments || []
-  const maxTime = Math.min(...segments.map(s => s.end)) + 120
-  const hardLimit = segments.length > 0 ? segments[segments.length - 1].end * 0.4 : Infinity
+  const segments = analysisB?.segments || [] // Trava de segurança
+  
   for (const seg of segments) {
     const label = seg.label.toLowerCase()
     if (!['drop', 'chorus', 'inst', 'intro'].includes(label)) continue
-    if (seg.start > maxTime || seg.start > hardLimit) continue
     if (seg.end - seg.start < 4) continue
+    
     const snapped = snapToBar(seg.start, bpm, firstBeat, 16)
     const snapped8 = snapToBar(seg.start, bpm, firstBeat, 8)
     const snapped4 = snapToBar(seg.start, bpm, firstBeat, 4)
@@ -288,6 +293,7 @@ function listEnterCandidates(analysisB: AudioAnalysis, bpm: number, firstBeat: n
     const final = use16 ? snapped : use8 ? snapped8 : snapped4
     candidates.push({ time: final.snappedSec, label: seg.label })
   }
+  
   const dedup: Array<{ time: number; label: string }> = []
   for (const c of candidates) {
     if (!dedup.some(d => Math.abs(d.time - c.time) < 0.5)) dedup.push(c)
@@ -304,10 +310,15 @@ export function discoverMixPoints(
   durationB: number,
   tspScore?: number
 ): { best: MixPointCandidate; alternatives: MixPointCandidate[] } {
-  const bpmA = analysisA.bpm || trackA.bpm || 120
-  const bpmB = analysisB.bpm || trackB.bpm || 120
-  const exits = listExitCandidates(analysisA, durationA, bpmA, trackA.firstBeatSec ?? 0)
-  const enters = listEnterCandidates(analysisB, bpmB, trackB.firstBeatSec ?? 0)
+  // TRAVA DE SEGURANÇA: Se a análise não veio, cria uma vazia
+  const safeAnalysisA = analysisA || { bpm: trackA.bpm || 120, segments: [] }
+  const safeAnalysisB = analysisB || { bpm: trackB.bpm || 120, segments: [] }
+
+  const bpmA = safeAnalysisA.bpm || trackA.bpm || 120
+  const bpmB = safeAnalysisB.bpm || trackB.bpm || 120
+
+  const exits = listExitCandidates(safeAnalysisA, durationA, bpmA, trackA.firstBeatSec ?? 0)
+  const enters = listEnterCandidates(safeAnalysisB, bpmB, trackB.firstBeatSec ?? 0)
   const camelot = camelotScore(trackA.key || '', trackB.key || '')
   const bpmS = bpmScore(bpmA, bpmB)
   const candidates: MixPointCandidate[] = []
@@ -333,10 +344,8 @@ export function discoverMixPoints(
 
       const remaining = durationA - exit.time
       
-      // 🆕 A MÁGICA AQUI: Exigir que a saída esteja nos últimos 40% da música
-      // Se estiver no meio (remaining < 40% da duração), a nota despenca
       if (remaining < durationA * 0.35) {
-        score -= 40 // Penalidade pesada
+        score -= 40
         reasons.push('⚠️ saída muito no meio da música')
       } else if (remaining >= 60) {
         score += 10
@@ -345,19 +354,15 @@ export function discoverMixPoints(
         score += 5
       }
 
-      // Crossfade bars: cabe no espaço?
-      // Só permite 32 barras se tiver 1min de sobra
       const maxCross = Math.min(remaining, durationB - enter.time)
       const barDur = secondsPerBar(bpmA)
       
       let crossBars = 4
       if (remaining >= 60) {
-        // Se tem 1min de sobra, pode usar 32 ou 16
         for (const bars of [32, 16, 8]) {
           if (barDur * bars <= maxCross) { crossBars = bars; break }
         }
       } else {
-        // Se tem pouco espaço, só 4 ou 8
         for (const bars of [8, 4]) {
           if (barDur * bars <= maxCross) { crossBars = bars; break }
         }
@@ -383,7 +388,6 @@ export function discoverMixPoints(
 
   candidates.sort((a, b) => b.score - a.score)
 
-  // 🆕 FALLBACK INTELIGENTE
   if (candidates.length === 0) {
     const isApproved = tspScore !== undefined && tspScore >= 80
     
@@ -408,6 +412,85 @@ export function discoverMixPoints(
 }
 
 // ============================================================
+// 🆕 RECEITA DE EQ
+// ============================================================
+
+function calculateBassSwapBar(exitLabel: string, enterLabel: string, crossfadeBars: number): number {
+  const exit = (exitLabel || '').toLowerCase()
+  const enter = (enterLabel || '').toLowerCase()
+
+  let bar: number
+
+  if (enter.includes('chorus') || enter.includes('drop')) {
+    bar = 4
+  } else if (enter.includes('breakdown')) {
+    bar = Math.max(4, crossfadeBars - 4)
+  } else if (enter.includes('intro') || enter.includes('inst')) {
+    bar = Math.round(crossfadeBars / 2)
+  } else {
+    bar = Math.round(crossfadeBars / 2)
+  }
+
+  if (exit.includes('outro') || exit.includes('inst')) {
+    bar = Math.max(2, bar - 2)
+  }
+
+  return Math.max(2, Math.min(crossfadeBars - 1, bar))
+}
+
+function buildEqAdvice(
+  exitLabel: string,
+  enterLabel: string,
+  crossfadeBars: number,
+  bassSwapBar: number
+): { low: string; mid: string; high: string } {
+  const exit = (exitLabel || '').toLowerCase()
+  const enter = (enterLabel || '').toLowerCase()
+
+  const isFallback = enter.includes('fallback') || enter.includes('início da faixa')
+
+  let low: string
+  if (isFallback) {
+    low = `LOW da B fechado · bass swap no compasso ${bassSwapBar} (padrão seguro)`
+  } else if (enter.includes('chorus') || enter.includes('drop')) {
+    low = `LOW da B fechado · BASS SWAP RÁPIDO no compasso ${bassSwapBar} (B entra com energia)`
+  } else if (enter.includes('breakdown')) {
+    low = `LOW da A segura até o compasso ${bassSwapBar} · depois abre LOW da B (breakdown sem kick)`
+  } else if (enter.includes('intro') || enter.includes('inst')) {
+    low = `LOW da B fechado · BASS SWAP no compasso ${bassSwapBar} (B entra limpa, troca com calma)`
+  } else {
+    low = `LOW da B fechado · BASS SWAP no compasso ${bassSwapBar}`
+  }
+
+  let mid: string
+  const aHasVocalAtEnd = exit.includes('chorus') || exit.includes('verse') || exit.includes('drop')
+  const bHasVocalAtStart = enter.includes('chorus') || enter.includes('verse') || enter.includes('drop')
+
+  if (aHasVocalAtEnd && bHasVocalAtStart) {
+    mid = `MID da B FECHADO até o fim do crossfade (vocal da A ainda rolando) · abre só depois do compasso ${crossfadeBars}`
+  } else if (bHasVocalAtStart) {
+    mid = `MID da B fechado · abre no compasso ${Math.max(2, bassSwapBar - 2)} (antes do vocal da B entrar)`
+  } else if (aHasVocalAtEnd) {
+    mid = `MID da A abaixa no compasso ${bassSwapBar} · MID da B pode abrir no fim do crossfade`
+  } else {
+    mid = `MID da B pode abrir no meio do crossfade (sem choque de vocal)`
+  }
+
+  let high: string
+  if (isFallback) {
+    high = `HI da B aberto desde o início (é o que cola a B sem aparecer)`
+  } else if (enter.includes('breakdown')) {
+    high = `HI da B ABERTO desde o início · sobe +2dB no breakdown pra dar brilho`
+  } else if (enter.includes('intro')) {
+    high = `HI da B ABERTO desde o início · é o que faz a B "flutuar" em cima da A`
+  } else {
+    high = `HI da B aberto desde o início · mantém aberto até o fim do crossfade`
+  }
+
+  return { low, mid, high }
+}
+
+// ============================================================
 // CÁLCULO DE MIXAGEM (A → B)
 // ============================================================
 
@@ -419,73 +502,119 @@ export function calculateMixTimeline(
   durationA: number = 300,
   durationB: number = 300,
   startOffsetA: number = 0,
-  tspScore?: number // 🆕 Parâmetro extra
+  tspScore?: number
 ): MixTimeline {
   const notes: string[] = []
+  
+  const safeDurationA = durationA > 0 ? durationA : 300
+  const safeDurationB = durationB > 0 ? durationB : 300
+
+  // TRAVA DE SEGURANÇA (AQUI ESTAVA O ERRO DA LINHA 541)
+  const safeAnalysisA = analysisA || { bpm: trackA.bpm || 120, segments: [] }
+
   const { best, alternatives } = discoverMixPoints(
-    trackA, trackB, analysisA, analysisB, durationA, durationB, tspScore
+    trackA, trackB, safeAnalysisA, analysisB, safeDurationA, safeDurationB, tspScore
   )
-    const safeBest = best ?? {
-    exitFromA: durationA > 60 ? durationA - 15 : durationA * 0.75, // 15s antes do fim
-    enterIntoB: 0,
-    crossfadeBars: 16,
-    score: 85, // 🆕 Nota mais alta para fallback (não é erro, é padrão)
-    reasons: ['fallback seguro — usando o final da faixa'],
-    snapPriority: 16,
-    exitLabel: 'final da faixa',
-    enterLabel: 'início da faixa',
+  
+  let safeBest = best
+  if (!safeBest) {
+    const isTspApproved = tspScore !== undefined && tspScore >= 80
+    const exitTime = durationA > 30 ? durationA - 15 : durationA * 0.75
+    safeBest = {
+      exitFromA: exitTime,
+      enterIntoB: 0,
+      crossfadeBars: 16,
+      score: isTspApproved ? 90 : 30,
+      reasons: isTspApproved 
+        ? ['TSP aprovou · crossfade padrão de 16 barras'] 
+        : ['fallback seguro — usando o final da faixa'],
+      snapPriority: 16,
+      exitLabel: isTspApproved ? 'final da faixa (padrão)' : 'fallback',
+      enterLabel: isTspApproved ? 'início da faixa (padrão)' : 'fallback',
+    }
   }
-  const crossfadeEnd = safeBest.exitFromA
+  
+  const safeEndLimit = safeDurationA > 1 ? safeDurationA - 1 : safeDurationA
+  const crossfadeEnd = Math.min(safeBest.exitFromA, safeEndLimit)
   const crossfadeBars = safeBest.crossfadeBars
-  const bpm = analysisA.bpm || trackA.bpm || 120
+  
+  // AQUI ESTAVA O ERRO DA LINHA 541 - CORRIGIDO
+  const bpm = safeAnalysisA.bpm || trackA.bpm || 120
   const barDuration = secondsPerBar(bpm)
   const crossfadeDuration = barDuration * crossfadeBars
   const crossfadeStart = Math.max(0, crossfadeEnd - crossfadeDuration)
-  const playBAtSec = safeBest.enterIntoB
-  const introB = { time: safeBest.enterIntoB, confidence: 'medium' as const }
+  
+  // 🆕 A SOLUÇÃO FINAL (Blindada e sem erros de digitação)
+  const safeEnterB = safeBest.enterIntoB > 0 ? safeBest.enterIntoB : 15
+  
+  let playBAtSec = 0
+  if (safeEnterB > crossfadeDuration) {
+    playBAtSec = safeEnterB - crossfadeDuration
+  } else {
+    playBAtSec = 0 // A intro da B é menor que o crossfade, então ela começa do 0
+  }
+  
   const confidence: 'high' | 'medium' | 'low' =
     safeBest.score >= 80 ? 'high' : safeBest.score >= 60 ? 'medium' : 'low'
+  
   notes.push(`Score ${safeBest.score}/100 — ${safeBest.reasons.slice(0, 3).join(' · ')}`)
   if (crossfadeBars < 16) {
     notes.push(`Crossfade reduzido para ${crossfadeBars} barras (espaço limitado)`)
   } else if (crossfadeBars === 32) {
     notes.push('Espaço de sobra — crossfade estendido para 32 barras')
   }
+  
   const crossfadeStartGlobalSec = crossfadeStart + startOffsetA
-  const crossfadeEndGlobalSec = crossfadeEnd + startOffsetA
-  const playBAtGlobalSec = playBAtSec + startOffsetA
+  const stopAAtLocal = crossfadeStart + crossfadeDuration
+  const stopAAtGlobal = crossfadeStartGlobalSec + crossfadeDuration
+  const playBAtGlobalSec = crossfadeStartGlobalSec
+
+  const bassSwapBar = calculateBassSwapBar(
+    safeBest.exitLabel,
+    safeBest.enterLabel,
+    crossfadeBars
+  )
+  const eqAdvice = buildEqAdvice(
+    safeBest.exitLabel,
+    safeBest.enterLabel,
+    crossfadeBars,
+    bassSwapBar
+  )
+
   return {
     playAtSec: crossfadeStart,
     crossfadeStartSec: crossfadeStart,
-    crossfadeEndSec: crossfadeEnd,
-    stopASec: crossfadeEnd,
+    crossfadeEndSec: stopAAtLocal,
+    stopASec: stopAAtLocal,
     crossfadeStartBarNumber: barNumberAt(crossfadeStart, bpm, trackA.firstBeatSec ?? 0),
-    crossfadeEndBarNumber: barNumberAt(crossfadeEnd, bpm, trackA.firstBeatSec ?? 0),
+    crossfadeEndBarNumber: barNumberAt(stopAAtLocal, bpm, trackA.firstBeatSec ?? 0),
     crossfadeEndOffset: 0,
     playBAtSec,
     playBAtFormatted: formatSecondsWithDecimal(playBAtSec),
-    introEndBSec: safeBest.enterIntoB,
-    introEndBFormatted: formatSeconds(safeBest.enterIntoB),
+    introEndBSec: safeEnterB,
+    introEndBFormatted: formatSeconds(safeEnterB),  
     playAtFormatted: formatSeconds(crossfadeStart),
     crossfadeStartFormatted: formatSeconds(crossfadeStart),
-    crossfadeEndFormatted: formatSeconds(crossfadeEnd),
-    stopAFormatted: formatSeconds(crossfadeEnd),
+    crossfadeEndFormatted: formatSeconds(stopAAtLocal),
+    stopAFormatted: formatSeconds(stopAAtLocal),
     crossfadeDurationSec: crossfadeDuration,
     crossfadeBars,
     confidence,
     notes,
     startOffsetA,
     crossfadeStartGlobalSec,
-    crossfadeEndGlobalSec,
+    crossfadeEndGlobalSec: stopAAtGlobal,
     playBAtGlobalSec,
     crossfadeStartGlobalFormatted: formatSeconds(crossfadeStartGlobalSec),
-    crossfadeEndGlobalFormatted: formatSeconds(crossfadeEndGlobalSec),
+    crossfadeEndGlobalFormatted: formatSeconds(stopAAtGlobal),
     playBAtGlobalFormatted: formatSeconds(playBAtGlobalSec),
     score: safeBest.score,
     scoreReasons: safeBest.reasons,
     exitLabel: safeBest.exitLabel,
     enterLabel: safeBest.enterLabel,
     alternatives,
+    eqAdvice,
+    bassSwapBar,
   }
 }
 
@@ -501,19 +630,20 @@ export interface Transition {
 }
 
 export function calculateFullTimeline(
-  setlist: Array<{ track: Track; analysis: AudioAnalysis; duration: number; tspScore?: number }> // 🆕 Aceita tspScore
+  setlist: Array<{ track: Track; analysis: AudioAnalysis; duration: number; tspScore?: number }>
 ): Transition[] {
   const transitions: Transition[] = []
   let currentOffsetA = 0
   for (let i = 0; i < setlist.length - 1; i++) {
     const a = setlist[i]
     const b = setlist[i + 1]
+    
     const timeline = calculateMixTimeline(
       a.track, b.track,
       a.analysis, b.analysis,
       a.duration, b.duration,
       currentOffsetA,
-      a.tspScore // 🆕 Passa a nota do TSP
+      a.tspScore
     )
     transitions.push({
       from: a.track,
@@ -521,7 +651,9 @@ export function calculateFullTimeline(
       timeline,
       startOffsetA: currentOffsetA,
     })
-    currentOffsetA = (timeline.crossfadeStartGlobalSec ?? 0) - timeline.playBAtSec
+    
+    // O próximo offset é o fim do crossfade da A
+   currentOffsetA = timeline.crossfadeEndGlobalSec ?? 0;
   }
   return transitions
 }

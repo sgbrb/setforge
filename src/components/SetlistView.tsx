@@ -14,11 +14,12 @@ import {
   discoverMixPoints,
 } from '@/lib/mix-timeline'
 import { analyzeTransitions, type TransitionIssue } from '@/lib/setlist-analysis'
-import { getTargetEnergy } from '@/lib/harmonic-utils' // 🆕 Para o gráfico
+import { getTargetEnergy } from '@/lib/harmonic-utils'
 import CompatibilityMatrix from './CompatibilityMatrix'
 import EnergyCurveChart from './EnergyCurveChart'
 import HarmonyCurveChart from './HarmonyCurveChart'
 import SaveToFolderButton from './SaveToFolderButton'
+import type { SmartSetlistFilters } from './SmartSetlistModal'
 
 interface SetlistViewProps {
   setlist: GeneratedSetlist
@@ -29,6 +30,9 @@ interface SetlistViewProps {
   allTracks?: Track[]
   allFolders?: Folder[]
   energyTrend?: 'steady' | 'build' | 'wave' | 'custom'
+  bpmTarget?: number | null
+  bpmRange?: number
+  filters?: SmartSetlistFilters | null
 }
 
 export default function SetlistView({
@@ -40,37 +44,37 @@ export default function SetlistView({
   allTracks = [],
   allFolders = [],
   energyTrend, 
+  bpmTarget,
+  bpmRange,
+  filters,
 }: SetlistViewProps) {
- const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
+  const [expandedTransition, setExpandedTransition] = useState<number | null>(0)
   const [showMatrix, setShowMatrix] = useState(false)
-  // 🆕 Cache de transições (para calcular o score no frontend)
   const [transitionsOtimas, setTransitionsOtimas] = useState<Record<string, any[]>>({})
   const [transitionsBoas, setTransitionsBoas] = useState<Record<string, any[]>>({})
 
   useEffect(() => {
-    fetch('/transicoes_otimas.json').then(r => r.json()).then(setTransitionsOtimas).catch(console.error)
-    fetch('/transicoes_boas.json').then(r => r.json()).then(setTransitionsBoas).catch(console.error)
+    fetch('/transicoes_otimas.json')
+      .then(r => r.ok ? r.json() : {})
+      .then(setTransitionsOtimas)
+      .catch(() => setTransitionsOtimas({}))
+
+    fetch('/transicoes_boas.json')
+      .then(r => r.ok ? r.json() : {})
+      .then(setTransitionsBoas)
+      .catch(() => setTransitionsBoas({}))
   }, [])
 
-    const getScore = (fromTrack: any, toTrack: any): number => {
+  const getScore = (fromTrack: any, toTrack: any): number => {
     if (!fromTrack?.id || !toTrack?.id) return 0
-
-    // 1) Tenta no cache das ótimas
     let match = transitionsOtimas[fromTrack.id]?.find((o: any) => o.toTrackId === toTrack.id)
-    
-    // 2) Se não achou, tenta no cache das boas
     if (!match) {
       match = transitionsBoas[fromTrack.id]?.find((o: any) => o.toTrackId === toTrack.id)
     }
-    
-    // 3) Se achou no arquivo, retorna a nota
     if (match) return Math.round(match.score)
-
-    // 4) 🆕 Se NÃO achou, faz o cálculo antigo (fallback)
-    // Passamos 0 e 20 para position e total (só pra simular o cálculo)
     return getTransitionScore(fromTrack, toTrack, 0, 20) 
   }
-   // 🆕 ADICIONE AQUI (logo depois do showMatrix)
+
   const [lockedKeys, setLockedKeys] = useState<Set<number>>(new Set())
   
   const toggleKeyLock = (index: number) => {
@@ -82,18 +86,38 @@ export default function SetlistView({
     })
   }
 
-  // 🆕 Função para trocar a faixa
-  const [isReplacing, setIsReplacing] = useState<number | null>(null)
+  const [isLikingSet, setIsLikingSet] = useState(false)
+  const [likedSet, setLikedSet] = useState(false)
 
-  // 🆕 Estado para guardar as músicas que já foram testadas/rejeitadas
+  const handleLikeSet = async () => {
+    setIsLikingSet(true)
+    try {
+      const energyAvg = setlist.setlist.reduce((acc, t) => acc + (t.energy || 0), 0) / setlist.setlist.length
+      const bpmTarget = (setlist as any).filters?.bpmTarget || null
+      const res = await fetch('/api/setlist/like-setlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setlistId: setlist.id, bpmTarget, energyAvg }),
+      })
+      if (!res.ok) throw new Error('Erro ao curtir set')
+      setLikedSet(true)
+      alert('Set curtido! O sistema vai usar essa vibe nos próximos sets.')
+    } catch (err) {
+      alert('Erro ao curtir o set')
+    } finally {
+      setIsLikingSet(false)
+    }
+  }
+
+  const [isReplacing, setIsReplacing] = useState<number | null>(null)
   const [rejectedTracks, setRejectedTracks] = useState<Record<number, string[]>>({})
 
-    const handleReplaceTrack = async (index: number, keyOffset: number = 0, targetEnergy: number | null = null) => {
+  const handleReplaceTrack = async (index: number, keyOffset: number = 0, targetEnergy: number | null = null) => {
     setIsReplacing(index)
     const storageKey = `rejected_${setlist.id}`
     const stored = localStorage.getItem(storageKey)
     const allRejeitadas: string[] = stored ? JSON.parse(stored) : []
-    const isLocked = lockedKeys.has(index) // 🆕 Verifica se o cadeado está ativo
+    const isLocked = lockedKeys.has(index)
 
     try {
       const res = await fetch('/api/setlist/replace-track', {
@@ -103,9 +127,12 @@ export default function SetlistView({
           setlistId: setlist.id, 
           positionToReplace: index + 1,
           rejectedIds: allRejeitadas,
-          keyOffset: isLocked ? 0 : keyOffset, // 🆕 Se travado, ignora o offset
+          keyOffset: isLocked ? 0 : keyOffset,
           targetEnergy,
-          forcedKey: isLocked ? setlist.setlist[index].key : undefined, // 🆕 Força o Tom atual
+          forcedKey: isLocked ? setlist.setlist[index].key : undefined,
+          bpmTarget: filters?.bpmTarget || bpmTarget,
+          bpmRange: filters?.bpmRange || bpmRange,
+          energyTrend: filters?.energyTrend || energyTrend
         }),
       })
 
@@ -124,7 +151,6 @@ export default function SetlistView({
     }
   }
 
-   // 🆕 2. Função para EXPANDIR o set inteiro (nova, cole logo abaixo da de cima)
   const handleExpandSet = async () => {
     const amount = prompt('Quantas faixas a mais você quer adicionar ao final do set?', '10')
     if (!amount) return
@@ -144,10 +170,10 @@ export default function SetlistView({
       alert(err.message)
     }
   }
-  // 📋 Fase 5.6 — faixas do setlist SEM análise estrutural
+
   const tracksWithoutAnalysis = useMemo(() => {
-    if (!analyses) return setlist.setlist
-    return setlist.setlist.filter(t => !analyses[t.id])
+    if (!analyses || Object.keys(analyses).length === 0) return []
+    return setlist.setlist.filter(t => !analyses[t.id] && !(t as any)._analysis)
   }, [setlist, analyses])
 
   const copyMissingNames = async () => {
@@ -161,31 +187,57 @@ export default function SetlistView({
       alert('Não foi possível copiar. Tenta de novo.')
     }
   }
+
+  // 🆕 A MÁGICA ACONTECE AQUI
   const transitions = useMemo(() => {
     if (!analyses || !durations) return []
     
-    // 🆕 Passa o score do TSP para a timeline calcular os tempos corretos
     const items = setlist.setlist.map(t => {
-      let tspScore = 100 // padrão ouro
+      let tspScore = 100
       try {
         const note = t.transitionNote ? JSON.parse(t.transitionNote) : null
         if (note?.score !== undefined) tspScore = note.score
       } catch {}
       
+      let finalAnalysis = (t as any)._analysis || analyses[t.id]
+      
+      if (!finalAnalysis || !finalAnalysis.segments || finalAnalysis.segments.length === 0) {
+        const trackTitleNormalized = t.title.toLowerCase().trim()
+        const foundTrack = allTracks.find(ot => 
+          ot.title.toLowerCase().trim() === trackTitleNormalized ||
+          ot.title.toLowerCase().trim().includes(trackTitleNormalized)
+        )
+        if (foundTrack && analyses[foundTrack.id]) {
+          finalAnalysis = analyses[foundTrack.id]
+        }
+      }
+
+      let finalDuration = (t as any)._duration || durations[t.id] || 0
+      if (finalDuration === 0) {
+        const foundTrack = allTracks.find(ot => ot.title.toLowerCase().trim() === t.title.toLowerCase().trim())
+        if (foundTrack && durations[foundTrack.id]) {
+          finalDuration = durations[foundTrack.id]
+        }
+      }
+
       return {
         track: t as any,
-        analysis: analyses[t.id],
-        duration: durations[t.id] ?? 0,
-        tspScore: tspScore, // 🆕 passa a nota do TSP
+        analysis: finalAnalysis,
+        duration: finalDuration,
+        tspScore: tspScore,
       }
     })
-
-    const allHaveAnalysis = items.every(i => i.analysis)
-    if (!allHaveAnalysis) return []
-
+        // 🆕 LOG CIRÚRGICO (adicione aqui)
+    console.log("DEBUG ITEMS:", items.map((i: any) => ({
+      title: i.track.title,
+      temAnalysis: !!i.analysis,
+      qtdSegments: i.analysis?.segments?.length || 0,
+      duracao: i.duration
+    })))
+    // A verificação bloqueante foi REMOVIDA. 
+    // Se a música não tiver estrutura, o mix-timeline.ts usa o fallback.
     const timeline = calculateFullTimeline(items)
 
-    // 🆕 Ajusta a timeline com a nota do TSP
     for (let i = 0; i < timeline.length; i++) {
       const from = setlist.setlist[i]
       let noteData = null
@@ -197,31 +249,22 @@ export default function SetlistView({
       
       if (timeline[i] && timeline[i].timeline) {
         timeline[i].timeline.score = realScore
-
-        // Se o TSP aprovou, mas a timeline zerou os tempos, aplica o padrão de 16 barras
-        if (realScore >= 80 && timeline[i].timeline.playAtSec === 0 && timeline[i].timeline.stopASec === 0) {
-          const durationA = durations[from.id] ?? 300
-          timeline[i].timeline.crossfadeBars = 16
-          timeline[i].timeline.crossfadeDurationSec = 30
-          timeline[i].timeline.crossfadeEndSec = durationA - 15
-          timeline[i].timeline.crossfadeStartSec = durationA - 45
-          timeline[i].timeline.playAtSec = durationA - 45
-          timeline[i].timeline.stopASec = durationA - 15
-          timeline[i].timeline.playBAtSec = 0
-          timeline[i].timeline.scoreReasons = ['TSP aprovou · mixagem no final da faixa']
-          timeline[i].timeline.notes = ['Mixagem no final · 16 barras (30s)']
-        }
       }
     }
 
     return timeline
-  }, [setlist, analyses, durations, transitionsOtimas, transitionsBoas])
-  
-  // 🆕 Sugestões de substitutas desativadas (o autoFixSetlist no backend já faz isso)
+  }, [setlist, analyses, durations, allTracks])
+
   const suggestions = useMemo(() => ({} as Record<number, Array<{ track: Track; score: number; folderName: string | null }>>), [])
 
-     const exportPdf = async () => {
+  const exportPdf = async () => {
     try {
+      const eqMap: Record<number, any> = {}
+      for (let i = 0; i < setlist.setlist.length - 1; i++) {
+        const t = transitions[i]
+        if (t?.timeline) eqMap[i] = t.timeline
+      }
+
       const doc = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -233,7 +276,6 @@ export default function SetlistView({
       const margin = 15
       let y = margin
 
-      // ─── Header ──────────────────────────────
       doc.setFontSize(20)
       doc.setFont('helvetica', 'bold')
       doc.text('SETFORGE — SET LIST', margin, y)
@@ -245,12 +287,10 @@ export default function SetlistView({
       doc.text(`${setlist.setlist.length} faixas · gerado em ${dateStr}`, margin, y)
       y += 4
 
-      // Linha separadora
       doc.setDrawColor(180, 180, 180)
       doc.line(margin, y, pageWidth - margin, y)
       y += 6
 
-      // ─── Análise (se tiver) ──────────────────
       if (setlist.analysis) {
         doc.setFontSize(9)
         doc.setTextColor(100, 100, 100)
@@ -259,32 +299,31 @@ export default function SetlistView({
         y += analysisLines.length * 3.5 + 4
       }
 
-      // ─── Lista de faixas ─────────────────────
       doc.setTextColor(0, 0, 0)
       doc.setFontSize(10)
 
       for (let i = 0; i < setlist.setlist.length; i++) {
         const track = setlist.setlist[i]
+        const timeline = eqMap[i]
 
-        // Se tá perto do fim da página, cria nova
-        if (y > pageHeight - margin - 12) {
+        const needsSpace = timeline?.eqAdvice ? 34 : 12
+        if (y > pageHeight - margin - needsSpace) {
           doc.addPage()
           y = margin
         }
 
-        // Número + título
         doc.setFont('helvetica', 'bold')
+        doc.setFontSize(10)
         const num = String(i + 1).padStart(2, '0')
         doc.text(`${num}.`, margin, y)
 
         doc.setFont('helvetica', 'normal')
-        const titleText = track.title.length > 80 
-          ? track.title.slice(0, 77) + '...' 
+        const titleText = track.title.length > 70 
+          ? track.title.slice(0, 67) + '...' 
           : track.title
         doc.text(titleText, margin + 8, y)
         y += 4
 
-        // Linha 2: BPM, tom, energia
         doc.setFontSize(8)
         doc.setTextColor(100, 100, 100)
         const details: string[] = []
@@ -292,13 +331,47 @@ export default function SetlistView({
         if (track.key) details.push(`${track.key}`)
         if (track.energy) details.push(`energia ${track.energy}/10`)
         doc.text(details.join(' · '), margin + 8, y)
-        doc.setTextColor(0, 0, 0)
-        doc.setFontSize(10)
+        y += 4
 
-        y += 6
+        if (timeline && timeline.eqAdvice) {
+         const from = String(i + 1).padStart(2, '0')
+const to = String(i + 2).padStart(2, '0')
+
+doc.setTextColor(0, 0, 0)
+doc.setFont('helvetica', 'bold')
+doc.setFontSize(9)
+doc.text(`ENTRAR COM A M${to}: ${formatSeconds(timeline.crossfadeStartSec)} da M${from}`, margin + 8, y)
+y += 4
+doc.text(`SOLTAR A M${to} em: ${timeline.playBAtFormatted} (pule intro)`, margin + 8, y)
+y += 4
+doc.text(`FINALIZAR A M${from}: ${formatSeconds(timeline.stopASec)}  ·  ${timeline.crossfadeBars} bars`, margin + 8, y)
+y += 4
+
+doc.setFont('helvetica', 'normal')
+doc.setFontSize(7)
+doc.setTextColor(120, 120, 120)
+doc.text(`relógio do set: ${timeline.crossfadeStartGlobalFormatted} a ${timeline.crossfadeEndGlobalFormatted}`, margin + 8, y)
+y += 3.5
+doc.setTextColor(60, 60, 60)
+
+          doc.text(`LOW: ${timeline.eqAdvice.low.replace(/·.*$/, '').trim()}`, margin + 8, y)
+          y += 3.2
+          doc.text(`MID: ${timeline.eqAdvice.mid.replace(/·.*$/, '').trim()}`, margin + 8, y)
+          y += 3.2
+          doc.text(`HI:  ${timeline.eqAdvice.high.replace(/·.*$/, '').trim()}`, margin + 8, y)
+          y += 3.5
+
+          if (timeline.bassSwapBar !== undefined) {
+            doc.setTextColor(80, 80, 80)
+            doc.text(`BASS SWAP: compasso ${timeline.bassSwapBar}`, margin + 8, y)
+            y += 3.5
+          }
+          doc.setTextColor(0, 0, 0)
+        }
+
+        y += 2
       }
 
-      // ─── Footer ──────────────────────────────
       y += 4
       if (y < pageHeight - margin - 8) {
         doc.setDrawColor(180, 180, 180)
@@ -309,7 +382,6 @@ export default function SetlistView({
         doc.text('Gerado por SetForge', margin, y)
       }
 
-      // Salva
       const filename = `setforge-${dateStr.replace(/\//g, '-')}.pdf`
       doc.save(filename)
 
@@ -322,7 +394,6 @@ export default function SetlistView({
     
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {/* 🆕 BOTÕES DE AÇÃO NO TOPO */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           onClick={exportPdf}
@@ -353,80 +424,100 @@ export default function SetlistView({
           />
         </div>
       </div>
-              <button
-          onClick={handleExpandSet}
-          style={{
-            flex: 1, minWidth: 160, padding: '12px 20px',
-            background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
-            border: 'none', borderRadius: 10, color: '#fff',
-            fontSize: 14, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          ➕ expandir set
-        </button>
-          {/* 📋 FASE 5.6 — copiar nomes das que faltam análise */}
-          {tracksWithoutAnalysis.length > 0 && (
-            <div style={{
-              padding: '12px 16px',            
-              background: 'var(--surface2)',
-              border: '1px dashed var(--border)',
-              borderRadius: 10,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 12,
-              flexWrap: 'wrap',
+      <button
+        onClick={handleExpandSet}
+        style={{
+          flex: 1, minWidth: 160, padding: '12px 20px',
+          background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+          border: 'none', borderRadius: 10, color: '#fff',
+          fontSize: 14, fontWeight: 600, cursor: 'pointer',
+        }}
+      >
+        ➕ expandir set
+      </button>
+      {tracksWithoutAnalysis.length > 0 && (
+        <div style={{
+          padding: '12px 16px',            
+          background: 'var(--surface2)',
+          border: '1px dashed var(--border)',
+          borderRadius: 10,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <p style={{
+              fontSize: 13,
+              color: 'var(--fg)',
+              fontFamily: 'var(--font-mono, monospace)',
+              margin: 0,
             }}>
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <p style={{
-                  fontSize: 13,
-                  color: 'var(--fg)',
-                  fontFamily: 'var(--font-mono, monospace)',
-                  margin: 0,
-                }}>
-                  📋 {tracksWithoutAnalysis.length} de {setlist.setlist.length} faixa{setlist.setlist.length !== 1 ? 's' : ''} sem análise estrutural
-                </p>
-                <p style={{
-                  fontSize: 11,
-                  color: 'var(--muted)',
-                  margin: '4px 0 0 0',
-                }}>
-                  Faça upload dessas pra liberar o crossfade exato
-                </p>
-              </div>
-              <button
-                onClick={copyMissingNames}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 8,
-                  background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
-                  border: 'none',
-                  color: '#fff',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  fontFamily: 'var(--font-mono, monospace)',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                📋 copiar nomes
-              </button>
-            </div>
-          )}
+              📋 {tracksWithoutAnalysis.length} de {setlist.setlist.length} faixa{setlist.setlist.length !== 1 ? 's' : ''} sem análise estrutural
+            </p>
+            <p style={{
+              fontSize: 11,
+              color: 'var(--muted)',
+              margin: '4px 0 0 0',
+            }}>
+              Faça upload dessas pra liberar o crossfade exato
+            </p>
+          </div>
+          <button
+            onClick={copyMissingNames}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, #7c5cfc, #c45cfc)',
+              border: 'none',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: 'var(--font-mono, monospace)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            📋 copiar nomes
+          </button>
+        </div>
+      )}
+      <button
+        onClick={handleLikeSet}
+        disabled={isLikingSet}
+        style={{
+          flex: 1,
+          minWidth: 160,
+          padding: '12px 20px',
+          background: likedSet ? 'rgba(252, 92, 92, 0.15)' : 'var(--surface2)',
+          border: `1px solid ${likedSet ? 'var(--red)' : 'var(--border)'}`,
+          borderRadius: 10,
+          color: likedSet ? 'var(--red)' : 'var(--text)',
+          fontFamily: 'inherit',
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: isLikingSet ? 'not-allowed' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          opacity: isLikingSet ? 0.5 : 1,
+        }}
+      >
+        {likedSet ? '❤️ Set Curtido' : '🤍 Curtir Set'}
+      </button>
 
-          {/* ALERTA DE COMPATIBILIDADE */}
-            {analyses && durations && (
+      {analyses && durations && (
         <CompatibilityAlert
           setlist={setlist}
           analyses={analyses}
           durations={durations}
           suggestions={suggestions}
-          getScore={getScore} //
+          getScore={getScore}
         />
       )}
-   
 
-            {/* 🆕 Gráfico de energia (com Curva Elástica) */}
       {setlist.setlist.length > 0 && (
         <EnergyCurveChart 
           tracks={setlist.setlist}
@@ -435,11 +526,11 @@ export default function SetlistView({
         />
       )}
       
-<HarmonyCurveChart 
-  tracks={setlist.setlist}
-  totalPositions={setlist.setlist.length}
-/>
-      {/* ANÁLISE GERAL DO SET */}
+      <HarmonyCurveChart 
+        tracks={setlist.setlist}
+        totalPositions={setlist.setlist.length}
+      />
+      
       {setlist.analysis && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -466,36 +557,6 @@ export default function SetlistView({
         </div>
       )}
 
-            {/* Matriz de compatibilidade — DESABILITADA (descomentar pra reativar)
-
-      <div>
-        <button
-          onClick={() => setShowMatrix(!showMatrix)}
-          style={{
-            width: '100%',
-            padding: '10px 14px',
-            background: 'var(--surface2)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            color: 'var(--muted)',
-            fontSize: 12,
-            fontFamily: 'var(--font-mono, monospace)',
-            cursor: 'pointer',
-            textAlign: 'left',
-          }}
-        >
-          {showMatrix ? '▼' : '▶'} ver matriz de compatibilidade (avançado)
-        </button>
-        {showMatrix && (
-          <div style={{ marginTop: 12 }}>
-            <CompatibilityMatrix tracks={setlist.setlist} />
-          </div>
-        )}
-      </div>
-
-      */}
-
-      {/* SEQUÊNCIA DE FAIXAS */}
       <div>
         <p style={{
           fontSize: 11,
@@ -516,13 +577,13 @@ export default function SetlistView({
             return (
               <div key={track.id || i}>
                 <TrackRow
-                track={track}
-                index={i}
-                entryOffset={transition?.startOffsetA}
-                onReplace={(keyOffset, targetEnergy) => handleReplaceTrack(i, keyOffset, targetEnergy)}
-                isReplacing={isReplacing === i}
-                isLocked={lockedKeys.has(i)}              // 🆕 Adicione
-                onToggleLock={() => toggleKeyLock(i)} 
+                  track={track}
+                  index={i}
+                  entryOffset={i > 0 ? transitions[i - 1]?.timeline.crossfadeStartGlobalSec : undefined}
+                  onReplace={(keyOffset, targetEnergy) => handleReplaceTrack(i, keyOffset, targetEnergy)}
+                  isReplacing={isReplacing === i}
+                  isLocked={lockedKeys.has(i)}
+                  onToggleLock={() => toggleKeyLock(i)} 
                 />
 
                 {!isLast && transition && (
@@ -530,12 +591,13 @@ export default function SetlistView({
                     from={track}
                     to={setlist.setlist[i + 1]}
                     timeline={transition.timeline}
-                    analysisA={analyses?.[track.id] ?? null}
-                    durationA={durations?.[track.id] ?? 0}
+                    analysisA={(track as any)._analysis || analyses?.[track.id] || null}
+                    durationA={(track as any)._duration || durations?.[track.id] || 0}
                     isExpanded={expandedTransition === i}
                     onToggle={() =>
                       setExpandedTransition(expandedTransition === i ? null : i)
                     }
+                    index={i}
                   />
                 )}
 
@@ -568,34 +630,25 @@ export default function SetlistView({
           })}
         </div>
       </div>
-
-      
-     
-        
-
-      
     </div>
   )
 }
 
-// ============================================================
-// TrackRow
-// ============================================================
 function TrackRow({
   track,
   index,
   entryOffset,
   onReplace,
   isReplacing,
-  isLocked,        // 🆕 Adicione aqui
-  onToggleLock,    // 🆕 Adicione aqui
+  isLocked,
+  onToggleLock,
 }: {
   track: any
   index: number
   entryOffset?: number
   onReplace?: (keyOffset?: number, targetEnergy?: number | null) => void
   isReplacing?: boolean
-  isLocked?: boolean          // 🆕 Adicione aqui
+  isLocked?: boolean
   onToggleLock?: () => void  
 }) {
   const energyColor = track.energy >= 8 ? 'var(--red)'
@@ -642,22 +695,19 @@ function TrackRow({
         </span>
       )}
 
-      {/* 🆕 ÁREA DOS CONTROLES (Tudo alinhado) */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
-        
         {track.bpm > 0 && (
           <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)' }}>
             {track.bpm} BPM
           </span>
         )}
 
-                {/* 🆕 CONTROLE DE TOM (Fica colado no badge do tom) */}
         {track.key && track.key !== 'desconhecido' && track.key !== '' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             {onReplace && (
               <button
                 onClick={() => onReplace(-1, null)}
-                disabled={isReplacing || isLocked} // 🆕 Desabilita se travado
+                disabled={isReplacing || isLocked}
                 title={isLocked ? "Tom travado" : "Buscar tom -1"}
                 style={{
                   background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
@@ -681,7 +731,7 @@ function TrackRow({
             {onReplace && (
               <button
                 onClick={() => onReplace(1, null)}
-                disabled={isReplacing || isLocked} // 🆕 Desabilita se travado
+                disabled={isReplacing || isLocked}
                 title={isLocked ? "Tom travado" : "Buscar tom +1"}
                 style={{
                   background: 'transparent', border: '1px solid var(--border)', borderRadius: 4,
@@ -695,7 +745,6 @@ function TrackRow({
               </button>
             )}
 
-            {/* 🆕 BOTÃO DE CADEADO */}
             {onToggleLock && (
               <button
                 onClick={onToggleLock}
@@ -712,7 +761,6 @@ function TrackRow({
           </div>
         )}
 
-        {/* 🆕 CONTROLE DE ENERGIA (Fica colado nas barrinhas) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {onReplace && (
             <button
@@ -755,7 +803,6 @@ function TrackRow({
           )}
         </div>
 
-        {/* BOTÃO DE TROCAR NORMAL */}
         {onReplace && (
           <button
             onClick={() => onReplace(0, null)}
@@ -774,9 +821,6 @@ function TrackRow({
     </div>
   )
 }
-// ============================================================
-// SEGMENT STYLES
-// ============================================================
 
 const SEGMENT_STYLES: Record<string, { color: string; bg: string; label: string; icon: string }> = {
   intro:     { color: '#5c9cfc', bg: 'rgba(92, 156, 252, 0.35)',  label: 'intro',     icon: '↓' },
@@ -936,9 +980,121 @@ function StructureBar({
   )
 }
 
-// ============================================================
-// TransitionRow (com score + alternativas)
-// ============================================================
+function EqRecipe({
+  eqAdvice,
+  bassSwapBar,
+  crossfadeBars,
+}: {
+  eqAdvice?: { low: string; mid: string; high: string }
+  bassSwapBar?: number
+  crossfadeBars: number
+}) {
+  if (!eqAdvice) return null
+
+  const rows: Array<{ key: 'low' | 'mid' | 'high'; label: string; color: string; icon: string; text: string }> = [
+    { key: 'low',  label: 'LOW',  color: '#fc5c5c', icon: '🔊', text: eqAdvice.low  },
+    { key: 'mid',  label: 'MID',  color: '#fccc5c', icon: '🎤', text: eqAdvice.mid  },
+    { key: 'high', label: 'HI',   color: '#4cfc9a', icon: '✨', text: eqAdvice.high },
+  ]
+
+  return (
+    <div style={{
+      marginTop: 16,
+      padding: '12px 14px',
+      background: 'rgba(124, 92, 252, 0.06)',
+      border: '1px solid rgba(124, 92, 252, 0.30)',
+      borderRadius: 10,
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+        flexWrap: 'wrap',
+        gap: 8,
+      }}>
+        <p style={{
+          fontSize: 10,
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono, monospace)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+        }}>
+          🎛 receita de EQ
+        </p>
+
+        {bassSwapBar !== undefined && (
+          <span style={{
+            fontSize: 11,
+            color: 'var(--accent)',
+            fontFamily: 'var(--font-mono, monospace)',
+            fontWeight: 700,
+            padding: '3px 10px',
+            background: 'rgba(124, 92, 252, 0.18)',
+            border: '1px solid rgba(124, 92, 252, 0.4)',
+            borderRadius: 6,
+            whiteSpace: 'nowrap',
+          }}>
+            🔊 BASS SWAP → compasso {bassSwapBar} de {crossfadeBars}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {rows.map(row => (
+          <div
+            key={row.key}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              padding: '8px 10px',
+              background: 'var(--surface)',
+              borderLeft: `3px solid ${row.color}`,
+              borderRadius: 6,
+            }}
+          >
+            <span style={{
+              fontSize: 11,
+              color: row.color,
+              fontFamily: 'var(--font-mono, monospace)',
+              fontWeight: 700,
+              minWidth: 38,
+              flexShrink: 0,
+              paddingTop: 1,
+            }}>
+              {row.label}
+            </span>
+            <span style={{ fontSize: 13, flexShrink: 0, paddingTop: 1 }}>
+              {row.icon}
+            </span>
+            <p style={{
+              fontSize: 12,
+              color: 'var(--text)',
+              lineHeight: 1.5,
+              margin: 0,
+              flex: 1,
+            }}>
+              {row.text}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <p style={{
+        fontSize: 10,
+        color: 'var(--muted)',
+        fontFamily: 'var(--font-mono, monospace)',
+        fontStyle: 'italic',
+        marginTop: 10,
+        lineHeight: 1.5,
+      }}>
+        💡 HI aberto desde o início = B "flutua" sem aparecer · LOW e MID da B fechados até o bass swap
+      </p>
+    </div>
+  )
+}
 
 function TransitionRow({
   from,
@@ -948,6 +1104,7 @@ function TransitionRow({
   durationA,
   isExpanded,
   onToggle,
+  index,
 }: {
   from: any
   to: any
@@ -956,11 +1113,9 @@ function TransitionRow({
   durationA: number
   isExpanded: boolean
   onToggle: () => void
+  index: number 
 }) {
-  const [showAlternatives, setShowAlternatives] = useState(false)
-
   const rawScore = timeline.score ?? 0
-  // Se o score for 0 (porque não achou), usa 100 como fallback pra não dar erro
   const score = rawScore === 0 ? 100 : rawScore
   const scoreColor = score >= 80 ? 'var(--green)'
     : score >= 60 ? 'var(--yellow)'
@@ -991,7 +1146,6 @@ function TransitionRow({
             transition: 'border-color 0.15s',
           }}
         >
-          {/* Header clicável */}
           <button
             onClick={onToggle}
             style={{
@@ -1011,7 +1165,6 @@ function TransitionRow({
               {confidenceIcon}
             </span>
 
-            {/* 🆕 Score */}
             <span style={{
               fontSize: 12,
               color: scoreColor,
@@ -1071,41 +1224,37 @@ function TransitionRow({
 
               <TimelineVisual timeline={timeline} />
 
-              {/* INSTRUÇÕES PARA O DJ */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
                 <Instruction
                   icon="▶"
                   color="var(--accent)"
-                  label="Dê play na próxima faixa"
-                  value={`aos ${timeline.playBAtFormatted} da "${to.title}"`}
-                  hint={
-                    timeline.enterLabel
-                      ? `entrada no ${timeline.enterLabel} · saída no ${timeline.exitLabel}`
-                      : `a faixa começa direto com o beat`
-                  }
-                  globalTime={timeline.playBAtGlobalFormatted}
+                  label={`Dê play na Música ${index + 2}`}
+                  value={`no beat forte dela (aos ${timeline.playBAtFormatted})`}
+                  hint={`Pule a intro da Música ${index + 2}. Aperte o play quando o relógio do set marcar ${timeline.crossfadeStartGlobalFormatted}.`}
                 />
 
                 <Instruction
                   icon="⟷"
                   color="var(--green)"
-                  label="Inicie o crossfade"
-                  value={`aos ${timeline.crossfadeStartFormatted} de "${from.title}"`}
-                  hint={`${timeline.crossfadeBars} barras (${formatSeconds(timeline.crossfadeDurationSec)})`}
-                  globalTime={timeline.crossfadeStartGlobalFormatted}
+                  label={`Inicie o crossfade na Música ${index + 1}`}
+                  value={`aos ${timeline.crossfadeStartGlobalFormatted} do set`}
+                  hint={`Faça a transição por ${timeline.crossfadeBars} barras.`}
                 />
 
                 <Instruction
                   icon="■"
                   color="var(--red)"
-                  label="Desligue a faixa anterior"
-                  value={`aos ${timeline.stopAFormatted}`}
-                  hint={`aos ${timeline.stopAFormatted} de "${from.title}"`}
-                  globalTime={timeline.crossfadeEndGlobalFormatted}
+                  label={`Desligue a Música ${index + 1}`}
+                  value={`aos ${timeline.crossfadeEndGlobalFormatted} do set`}
+                  hint={`O beat da Música ${index + 2} já está na pista. Pode fechar o fader.`}
                 />
               </div>
+              <EqRecipe
+                eqAdvice={timeline.eqAdvice}
+                bassSwapBar={timeline.bassSwapBar}
+                crossfadeBars={timeline.crossfadeBars}
+              />
 
-              {/* 🆕 SCORE REASONS */}
               {timeline.scoreReasons && timeline.scoreReasons.length > 0 && (
                 <div style={{
                   marginTop: 14,
@@ -1133,42 +1282,6 @@ function TransitionRow({
                       • {r}
                     </p>
                   ))}
-                </div>
-              )}
-
-              {/* 🆕 ALTERNATIVAS */}
-              {timeline.alternatives && timeline.alternatives.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <button
-                    onClick={() => setShowAlternatives(!showAlternatives)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      background: 'var(--surface2)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 8,
-                      color: 'var(--muted)',
-                      fontSize: 12,
-                      fontFamily: 'var(--font-mono, monospace)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                  >
-                    {showAlternatives ? '▼' : '▶'} ver {timeline.alternatives.length} alternativa{timeline.alternatives.length > 1 ? 's' : ''} de mix point
-                  </button>
-
-                  {showAlternatives && (
-                    <div style={{
-                      marginTop: 8,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
-                    }}>
-                      {timeline.alternatives.map((alt: MixPointCandidate, i: number) => (
-                        <AlternativeRow key={i} alt={alt} fromTitle={from.title} toTitle={to.title} />
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1201,10 +1314,6 @@ function TransitionRow({
     </div>
   )
 }
-
-// ============================================================
-// AlternativeRow
-// ============================================================
 
 function AlternativeRow({
   alt,
@@ -1267,10 +1376,6 @@ function AlternativeRow({
     </div>
   )
 }
-
-// ============================================================
-// TimelineVisual
-// ============================================================
 
 function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   const totalDuration = Math.max(timeline.crossfadeEndSec + 30, 120)
@@ -1349,10 +1454,6 @@ function TimelineVisual({ timeline }: { timeline: MixTimeline }) {
   )
 }
 
-// ============================================================
-// Instruction
-// ============================================================
-
 function Instruction({
   icon,
   color,
@@ -1423,10 +1524,6 @@ function Instruction({
   )
 }
 
-// ============================================================
-// CompatibilityAlert (recalibrado com score)
-// ============================================================
-
 interface SuggestionEntry {
   track: Track
   score: number
@@ -1446,8 +1543,6 @@ function CompatibilityAlert({
   suggestions: Record<number, SuggestionEntry[]>
   getScore: (from: any, to: any) => number
 }) {
-  // 🆕 Agora o frontend lê a nota pronta que veio do banco!
-  // 🆕 Agora o frontend lê a nota pronta que veio do banco!
   const result = (() => {
     let issues: TransitionIssue[] = []
     let ok = 0, criticalCount = 0, warningCount = 0, totalScore = 0
@@ -1489,7 +1584,6 @@ function CompatibilityAlert({
 
   if (result.total === 0) return null
 
-  // 🆕 Fase 5.7 — se TODAS as transições são 'unknown', mostrar aviso próprio
   if (result.unknownCount === result.total) {
     return (
       <div style={{
@@ -1615,7 +1709,6 @@ function CompatibilityAlert({
                 fontSize: 12,
               }}
             >
-              {/* Cabeçalho da issue */}
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                 <span style={{
                   color: issue.severity === 'critical' ? 'var(--red)' : 'var(--yellow)',

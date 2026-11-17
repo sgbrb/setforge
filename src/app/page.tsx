@@ -27,7 +27,6 @@ const DEFAULT_CONFIG: SetConfig = {
   audience: '',
 }
 
-// 🆕 Helper: pasta "real" = pasta específica (não 'all', não null)
 const isRealFolder = (id: string | null | 'all'): id is string =>
   typeof id === 'string' && id !== 'all'
 
@@ -43,6 +42,9 @@ export default function Home() {
 
   const [smartModalOpen, setSmartModalOpen] = useState(false)
   const [smartLoading, setSmartLoading] = useState(false)
+  
+  const [lastEnergyTrend, setLastEnergyTrend] = useState<'steady' | 'build' | 'wave' | 'custom'>('steady')
+  const [lastFilters, setLastFilters] = useState<SmartSetlistFilters | null>(null)
 
   const [analyses, setAnalyses] = useState<Record<string, AudioAnalysis>>({})
   const [durations, setDurations] = useState<Record<string, number>>({})
@@ -53,16 +55,12 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<'library' | 'history'>('library')
 
-  const [lastEnergyTrend, setLastEnergyTrend] = useState<'steady' | 'build' | 'wave' | 'custom'>('steady')
-
-  // 🔒 Redireciona se não estiver logado
   useEffect(() => {
     if (status === 'unauthenticated') {
       window.location.href = '/login'
     }
   }, [status])
 
-  // 📥 Carrega faixas do banco
   useEffect(() => {
     if (status !== 'authenticated') return
 
@@ -86,22 +84,28 @@ export default function Home() {
           key: t.key,
           energy: t.energy,
           source: 'upload',
-          firstBeatSec: t.firstBeatSec ?? 0,   // 🆕
+          firstBeatSec: t.firstBeatSec ?? 0,
         }))
 
         const newAnalyses: Record<string, AudioAnalysis> = {}
         const newDurations: Record<string, number> = {}
 
         dbTracks.forEach(t => {
-          if (t.segments) newAnalyses[t.id] = t.segments as AudioAnalysis
-          if (t.durationSec && t.durationSec > 0) newDurations[t.id] = t.durationSec
+          if (t.segments && Array.isArray(t.segments) && t.segments.length > 0) {
+            newAnalyses[t.id] = {
+              bpm: t.bpm || 0,
+              segments: t.segments,
+            }
+          }
+          
+          if (t.durationSec && t.durationSec > 0) {
+            newDurations[t.id] = t.durationSec
+          }
         })
 
         setTracks(mappedTracks)
         setAnalyses(newAnalyses)
         setDurations(newDurations)
-
-        console.log(`[page] Carregadas ${mappedTracks.length} faixas do banco`)
       } catch (err) {
         console.error('[page] Erro ao carregar faixas:', err)
       }
@@ -110,7 +114,6 @@ export default function Home() {
     loadTracks()
   }, [status, refreshKey])
 
-  // 📁 Carrega pastas do banco
   useEffect(() => {
     if (status !== 'authenticated') return
 
@@ -135,7 +138,6 @@ export default function Home() {
           }))
 
         setFolders(mappedFolders)
-        console.log(`[page] Carregadas ${mappedFolders.length} pastas do banco`)
       } catch (err) {
         console.error('[page] Erro ao carregar pastas:', err)
       }
@@ -144,11 +146,8 @@ export default function Home() {
     loadFolders()
   }, [status])
 
-  // 🎼 Carrega o setlist DA PASTA SELECIONADA (restaura após F5 / troca de pasta)
   useEffect(() => {
     if (status !== 'authenticated') return
-
-    // 🆕 Só busca setlist se for pasta real
     if (!isRealFolder(selectedFolderId)) {
       setSetlist(null)
       return
@@ -158,9 +157,7 @@ export default function Home() {
 
     const loadSetlistForFolder = async () => {
       try {
-        const res = await fetch(
-          `/api/setlist?folderId=${encodeURIComponent(selectedFolderId)}`
-        )
+        const res = await fetch(`/api/setlist?folderId=${encodeURIComponent(selectedFolderId)}`)
         if (!res.ok) {
           console.warn('[page] Falha ao carregar setlist:', res.status)
           return
@@ -171,12 +168,8 @@ export default function Home() {
 
         if (data.setlist && data.setlist.length > 0) {
           setSetlist(data)
-          console.log(
-            `[page] Setlist restaurado da pasta ${selectedFolderId}: ${data.setlist.length} faixas`
-          )
         } else {
           setSetlist(null)
-          console.log(`[page] Nenhum setlist salvo na pasta ${selectedFolderId}`)
         }
       } catch (err) {
         if (!cancelled) console.error('[page] Erro ao carregar setlist:', err)
@@ -190,19 +183,13 @@ export default function Home() {
     }
   }, [status, selectedFolderId])
 
-  // 🎯 Filtra faixas: agora ignoramos a pasta, mostramos sempre TUDO
   const filteredTracks = tracks
-
-  // 🆕 Força o tracksWithoutFolder para 0 (esconde o botão "sem pasta")
   const tracksWithoutFolder = 0
-
-  // 🆕 Flag: pode montar setlist?
   const canGenerateSetlist = selectedFolderId === 'all' || isRealFolder(selectedFolderId)
   const folderName = canGenerateSetlist
     ? folders.find(f => f.id === selectedFolderId)?.name ?? 'pasta'
     : null
 
-  // ➕ Adiciona faixa (local + banco) — com folderId
   const addTrack = (track: Track, durationSec?: number, fileHash?: string | null) => {
     const folderId = (selectedFolderId === 'all' || selectedFolderId === null)
       ? null
@@ -230,7 +217,6 @@ export default function Home() {
     })
       .then(res => {
         if (!res.ok) console.warn('[page] Falha ao salvar faixa:', res.status)
-        else console.log('[page] Faixa salva no banco:', track.title)
       })
       .catch(err => console.warn('[page] Erro ao salvar faixa:', err))
 
@@ -241,7 +227,6 @@ export default function Home() {
     }
   }
 
-  // ➖ Remove faixa
   const removeTrack = (id: string) => {
     const track = tracks.find(t => t.id === id)
 
@@ -261,7 +246,6 @@ export default function Home() {
       .catch(err => console.warn('[page] Erro ao deletar faixa:', err))
   }
 
-  // 🔀 Move faixa pra uma pasta (ou pra "sem pasta" se folderId=null)
   const moveTrackToFolder = (trackId: string, folderId: string | null) => {
     const track = tracks.find(t => t.id === trackId)
     if (!track) return
@@ -286,26 +270,20 @@ export default function Home() {
     })
       .then(res => {
         if (!res.ok) console.warn('[page] Falha ao mover faixa:', res.status)
-        else console.log(`[page] Faixa movida: "${track.title}" → ${folderId ?? 'sem pasta'}`)
       })
       .catch(err => console.warn('[page] Erro ao mover faixa:', err))
   }
 
-  // 🧹 Limpa biblioteca (apenas faixas visíveis) — COM CONFIRMAÇÃO
   const clearLibrary = () => {
     const count = filteredTracks.length
     const scope = selectedFolderId === 'all' ? 'biblioteca inteira' : 'esta pasta'
 
     const confirmed = window.confirm(
       `Tem certeza que quer apagar ${count} faixa${count !== 1 ? 's' : ''} da ${scope}?\n\n` +
-      `Essa ação é IRREVERSÍVEL. As análises estruturais serão perdidas ` +
-      `(leva ~2 min por faixa pra refazer).`
+      `Essa ação é IRREVERSÍVEL.`
     )
 
-    if (!confirmed) {
-      console.log('[page] clearLibrary cancelado pelo usuário')
-      return
-    }
+    if (!confirmed) return
 
     const ids = filteredTracks.map(t => t.id)
     setTracks(prev => prev.filter(t => !ids.includes(t.id)))
@@ -325,7 +303,6 @@ export default function Home() {
     }
   }
 
-  // 📁 Cria pasta
   const createFolder = async (name: string) => {
     const res = await fetch('/api/folders', {
       method: 'POST',
@@ -348,10 +325,8 @@ export default function Home() {
 
     setFolders(prev => [newFolder, ...prev])
     setSelectedFolderId(newFolder.id)
-    console.log('[page] Pasta criada:', newFolder.name)
   }
 
-  // 🗑 Deleta pasta
   const deleteFolder = async (folderId: string) => {
     const res = await fetch(`/api/folders?id=${encodeURIComponent(folderId)}`, {
       method: 'DELETE',
@@ -366,10 +341,8 @@ export default function Home() {
     setTracks(prev => prev.map(t => t.folderId === folderId ? { ...t, folderId: null } : t))
 
     if (selectedFolderId === folderId) setSelectedFolderId('all')
-    console.log('[page] Pasta deletada:', folderId)
   }
 
-  // ✏️ Renomeia pasta
   const renameFolder = async (folderId: string, newName: string) => {
     const res = await fetch('/api/folders', {
       method: 'PATCH',
@@ -385,10 +358,8 @@ export default function Home() {
     setFolders(prev => prev.map(f =>
       f.id === folderId ? { ...f, name: newName.trim() } : f
     ))
-    console.log('[page] Pasta renomeada:', folderId, '→', newName)
   }
 
-  // 🎼 Recebe análise estrutural
   const handleAddAnalysis = (
     trackId: string,
     analysis: AudioAnalysis & { key?: string; bpm?: number },
@@ -397,9 +368,6 @@ export default function Home() {
     setAnalyses(prev => ({ ...prev, [trackId]: analysis }))
     setDurations(prev => ({ ...prev, [trackId]: durationSec }))
 
-    // 🆕 Casar com faixa do setlist (por título + BPM)
-    // O upload chega com id temporário (upload-XXXXX). O setlist usa o Track.id real.
-    // Sem isso, a faixa analisada não some da lista "sem análise estrutural".
     if (setlist) {
       const uploaded = tracks.find(t => t.id === trackId)
       if (uploaded) {
@@ -410,7 +378,6 @@ export default function Home() {
         if (match && match.id !== trackId) {
           setAnalyses(prev => ({ ...prev, [match.id]: analysis }))
           setDurations(prev => ({ ...prev, [match.id]: durationSec }))
-          console.log(`[page] Análise casada: "${uploaded.title}" → ${match.id}`)
         }
       }
     }
@@ -434,15 +401,9 @@ export default function Home() {
         durationSec: durationSec,
         segments: analysis,
       }),
-    })
-      .then(res => {
-        if (!res.ok) console.warn('[page] Falha ao salvar análise:', res.status)
-        else console.log('[page] Análise salva no banco:', trackId)
-      })
-      .catch(err => console.warn('[page] Erro ao salvar análise:', err))
+    }).catch(err => console.warn('[page] Erro ao salvar análise:', err))
   }
 
-  // 🗑 Apaga a análise estrutural de uma faixa (mas mantém a faixa)
   const clearAnalysis = (trackId: string) => {
     setAnalyses(prev => {
       const next = { ...prev }
@@ -459,23 +420,18 @@ export default function Home() {
         bpm: 0,
         segments: null,
       }),
-    })
-      .then(res => {
-        if (!res.ok) console.warn('[page] Falha ao apagar análise:', res.status)
-        else console.log('[page] Análise apagada:', trackId)
-      })
-      .catch(err => console.warn('[page] Erro ao apagar análise:', err))
+    }).catch(err => console.warn('[page] Erro ao apagar análise:', err))
   }
-
-  // ⚡ Fase 5.3 — gera setlist via TSP (/api/generate-smart-setlist)
-  // 📥 Fase 5.4c — upload do XML do Rekordbox
 
   const handleSmartGenerate = async (filters: SmartSetlistFilters) => {
     setSmartLoading(true)
     setSetlist(null)
-     if (filters.energyTrend) {
+    setLastFilters(filters)
+    
+    if (filters.energyTrend) {
       setLastEnergyTrend(filters.energyTrend)
     }
+    
     try {
       const res = await fetch('/api/generate-smart-setlist', {
         method: 'POST',
@@ -487,64 +443,67 @@ export default function Home() {
           setSize: filters.setSize,
           onlyAnalyzed: true,
           folderId: 'all',
-          energyTrend: filters.energyTrend, // 🆕
+          energyTrend: filters.energyTrend,
           energyBlocks: filters.energyBlocks,
+          variety: (filters as any).variety,
         }),
       })
 
-      if (res.status === 401) {
-        alert('Você precisa fazer login para gerar um setlist.')
-        window.location.href = '/login'
-        return
-      }
-            // 🆕 TRATAMENTO DO PADRÃO OURO (422)
-      if (res.status === 422) {
-        const data = await res.json()
-        alert(
-          `⚠️ ${data.error}\n\n${data.details}\n\n💡 ${data.suggestion}`
-        )
-        setSmartModalOpen(false)
-        setSmartLoading(false) // <-- Importante para tirar o loading do botão
-        return
-      }
+      if (res.status === 401) { alert('Você precisa fazer login.'); window.location.href = '/login'; return }
+      if (res.status === 422) { const data = await res.json(); alert(`⚠️ ${data.error}\n\n${data.details}\n\n💡 ${data.suggestion}`); setSmartModalOpen(false); setSmartLoading(false); return }
       
       const data = await res.json()
-      if (!res.ok) {
-        alert(data.error || 'Erro ao gerar setlist inteligente')
-        return
-      }
+      if (!res.ok) { alert(data.error || 'Erro ao gerar setlist inteligente'); return }
 
-      // Adapta resposta da nossa rota pro formato que SetlistView espera
-      const adapted: GeneratedSetlist = {
+      // 🆕 Injeção de Dados Definitiva
+            // 🆕 MÁGICA DEFINITIVA
+            // 🆕 MÁGICA DEFINITIVA (EXTREMAMENTE TOLERANTE)
+      const tracksComDados = data.tracks.map((t: any) => {
+  // 1. Tenta achar pelo ID exato
+  let original = tracks.find(orig => orig.id === t.id);
+  
+  // 2. Se não achar, tenta pelo Título
+  if (!original) {
+    const cleanTitle = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const apiTitle = cleanTitle(t.title);
+    
+    original = tracks.find(orig => {
+      const libTitle = cleanTitle(orig.title);
+      return libTitle.includes(apiTitle) || apiTitle.includes(libTitle);
+    });
+  }
+  
+  // 🆕 CORREÇÃO: Usa os segments que vêm da API, não só do estado local
+  const analysisFromApi = t.segments ? { bpm: t.bpm, segments: t.segments } : null;
+  const analysisFromState = original ? analyses[original.id] : null;
+  
+  return {
+    ...t,
+    id: original ? original.id : t.id,
+    bpm: original ? original.bpm : t.bpm,
+    _analysis: analysisFromState || analysisFromApi, // 🆕 Prioriza estado local, mas usa da API se não tiver
+    _duration: original ? durations[original.id] || t.durationSec : t.durationSec,
+  }
+})
+      const adapted = {
         id: data.id,
-        setlist: data.tracks.map((t: any, i: number) => ({
+        setlist: tracksComDados.map((t: any, i: number) => ({
           ...t,
           position: i + 1,
           transitionNote: `score médio TSP: ${data.averageScore}/100`,
         })),
-        analysis:
-          `Setlist gerado por TSP (nearest neighbor + 2-opt + or-opt). ` +
-          `${data.tracks.length} faixas de ${data.candidates} candidatas. ` +
-          (data.effectiveCount < data.requestedCount
-            ? `⚠️ Pedido: ${data.requestedCount} faixas · Entregue: ${data.effectiveCount} (limite de diversidade de Camelot). `
-            : '') +
-          `Score médio ${data.averageScore}/100, pior ${data.worstScore}/100. ` +
-          `Tempo ${data.elapsedMs}ms (${data.attempts} tentativa${data.attempts !== 1 ? 's' : ''}).`,
-        djTip:
-          data.duplicate
-            ? data.warning || 'Set repetido — tente mudar os filtros.'
-            : 'Setlist otimizado por algoritmo. Revise as transições antes de tocar.',
-        peakMoment: 'Análise de pico será gerada na Fase 3 (análise sob demanda).',
+        analysis: `Setlist gerado por TSP. ${data.tracks.length} faixas. Score médio ${data.averageScore}/100.`,
+        djTip: 'Setlist otimizado.',
+        peakMoment: 'Análise disponível.',
         totalDuration: `${data.tracks.length}`,
-      }
+        filters: data.filters,
+      } as GeneratedSetlist
 
       setSetlist(adapted)
       setSmartModalOpen(false)
-      console.log(`[page] Setlist inteligente: ${data.tracks.length} faixas, score ${data.averageScore}/100`)
     } catch (error) {
       console.error('[page] Erro no generate-smart:', error)
-      const msg = error instanceof Error ? error.message : 'Erro desconhecido'
-      alert(`Erro ao gerar setlist inteligente: ${msg}`)
+      alert(`Erro: ${error instanceof Error ? error.message : 'Erro desconhecido'}`)
     } finally {
       setSmartLoading(false)
     }
@@ -566,15 +525,11 @@ export default function Home() {
       setActiveTab('library')
     } catch (err) {
       console.error('[page] Erro ao abrir setlist:', err)
-      alert('Erro ao abrir setlist')
     }
   }
-      // ... (outras funções lá em cima, como handleSmartGenerate, handleOpenSetlist, etc)
 
-  // 🆕 COLOQUE ELA AQUI (antes do generate)
   const refreshSetlist = async () => {
     if (!isRealFolder(selectedFolderId) && selectedFolderId !== 'all') return
-    
     try {
       const res = await fetch(`/api/setlist?folderId=${encodeURIComponent(selectedFolderId || 'all')}`)
       if (res.ok) {
@@ -586,15 +541,9 @@ export default function Home() {
     }
   }
 
-  // 🎼 Gera setlist via IA
   const generate = async () => {
-    // 🆕 Guarda-corpo: só gera se for pasta real
     if (!canGenerateSetlist) {
-      alert(
-        'Selecione uma pasta específica para montar o setlist.\n\n' +
-        'A lista "todas as faixas" serve apenas como repositório de uploads — ' +
-        'crie uma pasta (ex: "festa"), arraste as faixas pra lá, e monte o setlist dentro dela.'
-      )
+      alert('Selecione uma pasta específica para montar o setlist.')
       return
     }
 
@@ -607,12 +556,6 @@ export default function Home() {
     setSetlist(null)
     try {
       const optimalOrder = computeOptimalOrder(filteredTracks)
-      const optimalScore = scoreOrder(optimalOrder)
-
-      console.log(`[page] Ordem ótima local: score médio ${optimalScore}%`)
-      console.log(`[page] Ordem sugerida:`, optimalOrder.map(t => t.title).join(' → '))
-      console.log(`[page] Pasta: ${folderName} (${filteredTracks.length} faixas)`)
-
       const res = await fetch('/api/generate-setlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -633,8 +576,7 @@ export default function Home() {
       setSetlist(data)
     } catch (error) {
       console.error('Erro completo:', error)
-      const msg = error instanceof Error ? error.message : 'Erro desconhecido'
-      alert(`Erro ao gerar set list: ${msg}`)
+      alert(`Erro ao gerar set list: ${error instanceof Error ? error.message : 'Erro desconhecido'}`)
     } finally {
       setLoading(false)
     }
@@ -777,18 +719,11 @@ export default function Home() {
                       >
                         gerar SetForge
                       </button>
-                      {/* <button
-                        onClick={clearLibrary}
-                        style={{ ...btnStyle('secondary'), color: 'var(--red)', borderColor: 'var(--red)' }}
-                      >
-                        limpar biblioteca
-                      </button> */}
                     </div>
                   )}
                 </Panel>
               )}
 
-              {/* 🆕 Painel do setlist só aparece dentro de pasta real */}
               {canGenerateSetlist && (loading || setlist) && (
                 <Panel title="set list gerado" badge={setlist ? '● gerado' : undefined}>
                   {loading && (
@@ -803,6 +738,9 @@ export default function Home() {
                       setlist={setlist}
                       onRegenerate={generate}
                       energyTrend={lastEnergyTrend}
+                      bpmTarget={lastFilters?.bpmTarget}
+                      bpmRange={lastFilters?.bpmRange}
+                      filters={lastFilters}
                       onUpdate={refreshSetlist}
                       analyses={analyses}
                       durations={durations}
@@ -815,8 +753,6 @@ export default function Home() {
 
               {filteredTracks.length > 0 && (
                 <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-                  <p style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 12 }}>
-                  </p>
                   <TrackList
                     tracks={filteredTracks}
                     folders={folders}
